@@ -1,0 +1,149 @@
+"Phrases"
+{
+	"@backpack-menu-title"
+	{
+		"en" "Backpack Commands"
+	}
+
+	// ------------------------------------------------------------------------
+	//
+	// Create backpack command
+	//
+
+	"@backpack-menu-create"
+	{
+		"en" "Create backpack"
+	}
+
+	"@backpack-create-cmd-reply-t"
+	{
+		"#format" "{1:t}"
+		"en" "Created backpack for {1}"
+	}
+
+	"@backpack-create-cmd-reply-s"
+	{
+		"#format" "{1:s}"
+		"en" "Created backpack for {1}"
+	}
+
+	"@backpack-create-notifier"
+	{
+		"en" "Created backpack."
+	}
+
+	"@backpack-create-failed-notifier"
+	{
+		"en" "Couldn't create backpack."
+	}
+
+	// ------------------------------------------------------------------------
+	//
+	// Remove backpack command
+	//
+
+	"@backpack-menu-remove"
+	{
+		"en" "Remove targeted backpack"
+	}
+
+	"@backpack-remove-cmd-reply-t"
+	{
+		"#format" "{1:t}"
+		"en" "Removed backpack for {1}"
+	}
+
+	"@backpack-remove-cmd-reply-s"
+	{
+		"#format" "{1:s}"
+		"en" "Removed backpack for {1}"
+	}
+
+	"@backpack-remove-notifier"
+	{
+		"en" "Removed backpack."
+	}
+
+	"@backpack-destroyed-notifier"
+	{
+		"en" "Your backpack was removed by an admin."
+	}
+
+	// ------------------------------------------------------------------------
+	//
+	// Bring backpack command
+	//
+
+	"@backpack-menu-bring"
+	{
+		"en" "Bring backpack"
+	}
+
+	"@backpack-bring-cmd-reply-t"
+	{
+		"#format" "{1:t}"
+		"en" "Brought backpack from {1}"
+	}
+
+	"@backpack-bring-cmd-reply-s"
+	{
+		"#format" "{1:s}"
+		"en" "Brought backpack from {1}"
+	}
+
+	"@backpack-taken-notifier"
+	{
+		"en" "Your backpack was taken by an admin."
+	}
+
+	// ------------------------------------------------------------------------
+	//
+	// Misc
+	//
+
+	"@backpack-no-backpacks-found"
+	{
+		"en" "No backpacks found."
+	}
+
+	// Show to players that spawn with a backpack.
+	"@backpack-spawn-notifier"
+	{
+		"en" "You have a backpack. Drop fists to drop backpack."
+	}
+
+	"@backpack-choice-distance"
+	{
+		"#format" "{1:s}"
+		"en" "Distance to backpack: {1}"
+	}
+
+	"@backpack-choice-player"
+	{
+		"#format" "{1:s}"
+		"en" "Player: {1}"
+	}
+
+	// Shown whenever the server tries to execute a command that requires a client to execute it.
+	"@backpack-cannot-execute-as-server"
+	{
+		"en" "This command must be executed by a client."
+	}
+
+	// Shown when a backpack is created at an invalid position.
+	"@backpack-invalid-position"
+	{
+		"en" "Invalid position for backpack."
+	}
+
+	"@backpack-can-only-wear-one"
+	{
+		"en" "You can only wear one backpack."
+	}
+
+	"@backpack-unknown-backpack-type"
+	{
+		"#format" "{1:s}"
+		"en" "Unknown backpack type: {1}"
+	}
+}
