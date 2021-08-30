@@ -3075,11 +3075,6 @@ void PickupBackpack(int client, int backpack)
                 {
                     SetVariantString("!activator");
                     AcceptEntityInput(ornament, "SetAttached", client, client);
-                    PrintToServer("done attaching");
-                }
-                else
-                {
-                    PrintToServer("ornamet invalid");
                 }
 
                 static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
