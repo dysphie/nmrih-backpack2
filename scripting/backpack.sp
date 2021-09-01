@@ -14,7 +14,7 @@
 
 #define ADMFLAG_BACKPACK ADMFLAG_SLAY   // Backpack commands require slay permissions.
 
-#define BACKPACK_VERSION "1.4.1"
+#define BACKPACK_VERSION "1.4.2"
 
 public Plugin myinfo =
 {
@@ -2645,6 +2645,9 @@ int CreateBackpack(const float pos[3], const float angles[3], int backpack_type)
         DispatchKeyValue(backpack, "model", model);
         DispatchSpawn(backpack);
 
+        // This stops backpacks from blocking supply choppers
+        SetEntPropString(backpack, Prop_Data, "m_iClassname", "backpack");
+
         // Setup ornament to use custom model.
         g_backpack_type_ornament_models.GetString(backpack_type, model, sizeof(model));
         DispatchKeyValueVector(ornament, "origin", pos);
@@ -3462,11 +3465,11 @@ stock int GetClientActiveWeapon(int client)
 /**
  * Retrieve an entity's targetname (the name assigned to it in Hammer).
  *
- * @param entity			Entity to query.
- * @param targetname		Output buffer.
- * @param buffer_size		Size of output buffer.
+ * @param entity            Entity to query.
+ * @param targetname        Output buffer.
+ * @param buffer_size       Size of output buffer.
  *
- * @return					Number of non-null bytes written.
+ * @return                  Number of non-null bytes written.
  */
 stock int GetEntTargetname(int entity, char[] targetname, int buffer_size)
 {
@@ -3487,9 +3490,9 @@ stock void SetEntTargetname(int entity, const char[] targetname)
 /**
  * Retrieve an entity's health.
  *
- * @param entity			Entity to query.
+ * @param entity            Entity to query.
  *
- * @return					Entity's health.
+ * @return                  Entity's health.
  */
 stock int GetEntHealth(int entity)
 {
@@ -3511,8 +3514,8 @@ stock int GetEntMaxHealth(int entity)
 /**
  * Retrieve an entity's origin.
  *
- * @param entity			Entity to query.
- * @param origin			Output vector.
+ * @param entity            Entity to query.
+ * @param origin            Output vector.
  */
 stock void GetEntOrigin(int entity, float origin[3])
 {
@@ -3637,18 +3640,3 @@ stock ArrayList TupleGetArrayList(int[] tuple, int index)
 {
     return view_as<ArrayList>(tuple[index]);
 }
-
-// void GetWeightSpeedFactor(int client)
-// {
-//     if (g_cvar_noinvlimit.BoolValue || GetEntProp(client, Prop_Data, "m_bDucked"))
-//        return g_cvar_inv_speedfactor_norm.FloatValue;
-
-//     float totalCarried = GetTotalCarriedWeight(client);
-//     if (totalCarried >= g_cvar_inv_maxcarry.FloatValue)
-//         return g_cvar_inv_speedfactor_full.FloatValue;
-
-//     else if (totalCarried < g_cvar_inv_maxcarry.FloatValue * 0.5)
-//         return g_cvar_inv_speedfactor_half;
-
-//     return g_cvar_inv_speedfactor_norm.FloatValue;
-// }
