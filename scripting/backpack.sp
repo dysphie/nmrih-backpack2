@@ -18,7 +18,7 @@
 
 public Plugin myinfo =
 {
-    name = "[NMRiH] Backpack (Dysphie's fork)",
+    name = "[NMRiH] Backpack (Dysphie's Fork)",
     author = "Ryan.",
     description = "Portable inventory box.",
     version = BACKPACK_VERSION,
@@ -187,8 +187,8 @@ Handle g_detour_baseentity_start_fade_out;
 Handle g_detour_itembox_player_take_items;
 Handle g_detour_ammobox_fall_init;
 Handle g_detour_ammobox_fall_think;
-Handle g_detour_flare_projectile_explode;
 Handle g_detour_player_get_speed_factor;
+Handle g_detour_flare_projectile_explode;
 
 Handle g_dhook_weaponbase_fall_init;
 Handle g_dhook_weaponbase_fall_think;
@@ -236,8 +236,6 @@ ConVar g_cvar_backpack_speed;
 ConVar g_cvar_backpack_speedfactor_norm;
 ConVar g_cvar_backpack_speedfactor_half;
 ConVar g_cvar_backpack_speedfactor_full;
-
-ConVar g_cvar_backpack_supply_drop_cooldown;    // Number of seconds between airdrops players must wait.
 ConVar g_cvar_backpack_keep_supply_drops;       // When true, supply drops won't automatically fade out when another one is created.
 
 ConVar g_inv_maxcarry;
@@ -252,7 +250,7 @@ ConVar g_inv_maxcarry;
  * Native signature:
  * void CBaseEntity::SUB_StartFadeOut(float, bool)
  */
-MRESReturn Detour_BaseEntity_StartFadeOut(int entity)
+public MRESReturn Detour_BaseEntity_StartFadeOut(int entity, Handle params)
 {
     MRESReturn result = MRES_Ignored;
 
@@ -278,7 +276,7 @@ MRESReturn Detour_BaseEntity_StartFadeOut(int entity)
 /**
  * Pre-hook detour. Necessary for post-hook detour.
  */
-MRESReturn Detour_BaseItem_FallInit()
+public MRESReturn Detour_BaseItem_FallInit(int item)
 {
     return MRES_Ignored;
 }
@@ -286,7 +284,7 @@ MRESReturn Detour_BaseItem_FallInit()
 /**
  * Remove trigger flag on item so it can interact with our backpack trigger.
  */
-MRESReturn Detour_BaseItem_FallInitPost(int item)
+public MRESReturn Detour_BaseItem_FallInitPost(int item)
 {
     // Don't do this when the player is on a ladder because the item will
     // knock them off.
@@ -310,7 +308,7 @@ MRESReturn Detour_BaseItem_FallInitPost(int item)
 /**
  * Pre-hook detour. Necessary for post-hook detour.
  */
-MRESReturn Detour_BaseItem_FallThink()
+public MRESReturn Detour_BaseItem_FallThink(int item)
 {
     return MRES_Ignored;
 }
@@ -318,7 +316,7 @@ MRESReturn Detour_BaseItem_FallThink()
 /**
  * Move items to debris collision group.
  */
-MRESReturn Detour_BaseItem_FallThinkPost(int item)
+public MRESReturn Detour_BaseItem_FallThinkPost(int item)
 {
     SDKCall(g_sdkcall_baseentity_set_collision_group, item, COLLISION_GROUP_DEBRIS);
     return MRES_Ignored;
@@ -327,7 +325,7 @@ MRESReturn Detour_BaseItem_FallThinkPost(int item)
 /**
  * Move weapons to debris collision group and deflate expanded trigger bounds.
  */
-MRESReturn DHook_WeaponBase_FallInitPost(int weapon)
+public MRESReturn DHook_WeaponBase_FallInitPost(int weapon)
 {
     return Detour_BaseItem_FallInitPost(weapon);
 }
@@ -335,7 +333,7 @@ MRESReturn DHook_WeaponBase_FallInitPost(int weapon)
 /**
  * Move weapons to debris collision group.
  */
-MRESReturn DHook_WeaponBase_FallThinkPost(int weapon)
+public MRESReturn DHook_WeaponBase_FallThinkPost(int weapon)
 {
     return Detour_BaseItem_FallThinkPost(weapon);
 }
@@ -377,7 +375,7 @@ void Frame_RestoreRealClassname(int backpack_ref)
  * Native signature:
  * float CNMRiH_Player::GetWeightSpeedFactor()
  */
-MRESReturn Detour_Player_GetWeightSpeedFactor()
+public MRESReturn Detour_Player_GetWeightSpeedFactor()
 {
     return MRES_Ignored;
 }
@@ -388,7 +386,7 @@ MRESReturn Detour_Player_GetWeightSpeedFactor()
  * Native signature:
  * float CNMRiH_Player::GetWeightSpeedFactor()
  */
-MRESReturn Detour_Player_GetWeightSpeedFactorPost(int client, Handle return_handle)
+public MRESReturn Detour_Player_GetWeightSpeedFactorPost(int client, Handle return_handle)
 {
     MRESReturn result = MRES_Ignored;
 
@@ -458,7 +456,7 @@ bool PlayerOwnsItemType(int client, const char[] classname)
  * Native signature:
  * void CItem_InventoryBox::PlayerTakeItems(CBasePlayer *player, int weapon, int gear, int ammo)
  */
-MRESReturn Detour_ItemBox_PlayerTakeItems(int item_box, Handle params)
+public MRESReturn Detour_ItemBox_PlayerTakeItems(int item_box, Handle params)
 {
     int client = DHookGetParam(params, 1);
     int weapon_slot = DHookGetParam(params, 2);
@@ -1005,14 +1003,8 @@ public void OnPluginStart()
     g_cvar_backpack_speedfactor_full = CreateConVar("sm_backpack_speedfactor_full", "0.75",
         "Movement speed factor when backpack is completely full.");
 
-    g_cvar_backpack_supply_drop_cooldown = CreateConVar("sm_backpack_supply_drop_cooldown", "30",
-        "Number of seconds player must wait between supply drops from a flare gun.");
-
     g_cvar_backpack_keep_supply_drops = CreateConVar("sm_backpack_keep_supply_drops", "1",
         "Prevent non-empty inventory boxes from fading out when another one is created.");
-
-    g_cvar_backpack_npc_chance = CreateConVar("sm_backpack_zombie_chance", "0.1",
-        "Chance for a zombie to spawn with a backpack");
 
     AutoExecConfig(true);
 
@@ -1105,12 +1097,6 @@ void LoadPluginGamedata()
         LogError("Failed to detour AmmoBox::FallThink post");
     }
 
-    // g_detour_flare_projectile_explode = DHookCreateFromConfOrFail(gameconf, "CNMRiHFlareProjectile::Explode");
-    // if (!DHookEnableDetour(g_detour_flare_projectile_explode, DHOOK_PRE, Detour_FlareProjectile_Explode))
-    // {
-    //     LogError("Failed to detour CNMRiHFlareProjectile::Explode");
-    // }
-
     g_detour_player_get_speed_factor = DHookCreateFromConfOrFail(gameconf, "CNMRiH_Player::GetWeightSpeedFactor");
     if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_PRE, Detour_Player_GetWeightSpeedFactor))
     {
@@ -1119,6 +1105,12 @@ void LoadPluginGamedata()
     if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_POST, Detour_Player_GetWeightSpeedFactorPost))
     {
         LogError("Failed to detour CNMRiH_Player::GetWeightSpeedFactor post");
+    }
+
+    g_detour_flare_projectile_explode = DHookCreateFromConfOrFail(gameconf, "CNMRiHFlareProjectile::Explode");
+    if (!DHookEnableDetour(g_detour_flare_projectile_explode, DHOOK_PRE, Detour_FlareProjectile_Explode))
+    {
+        LogError("Failed to detour CNMRiHFlareProjectile::Explode");
     }
 
     g_dhook_weaponbase_fall_init = DHookCreateFromConfOrFail(gameconf, "CBaseCombatWeapon::FallInit");
@@ -1991,18 +1983,17 @@ public void OnEntityCreated(int entity, const char[] classname)
  */
 void HandleNewEntity(int entity, bool spawning)
 {
-    if (!IsValidEdict(entity))
-        return;
-
-    if (IsEntityZombie(entity))
+    if (IsValidEntity(entity))
     {
-        float rnd = GetRandomFloat(0.0, 100.0);
-        if (rnd <= g_cvar_backpack_npc_chance.FloatValue)
+        if (spawning)
         {
-            int ornament = CreatebackPackOrnament()
+            SDKHook(entity, SDKHook_SpawnPost, Hook_DHookWeaponFall);
+        }
+        else
+        {
+            Hook_DHookWeaponFall(entity);
         }
     }
-    
 }
 
 /**
@@ -2687,6 +2678,13 @@ int CreateBackpack(const float pos[3], const float angles[3], int backpack_type)
         DispatchKeyValue(backpack, "model", model);
         DispatchSpawn(backpack);
 
+        // Setup ornament to use custom model.
+        g_backpack_type_ornament_models.GetString(backpack_type, model, sizeof(model));
+        DispatchKeyValueVector(ornament, "origin", pos);
+        DispatchKeyValue(ornament, "model", model);
+        DispatchKeyValue(ornament, "disableshadows", "1");
+        DispatchSpawn(ornament);
+
 
         int color[3] = { 0, 255, 0 };
 
@@ -2739,21 +2737,6 @@ int CreateBackpack(const float pos[3], const float angles[3], int backpack_type)
     }
 
     return backpack;
-}
-
-int CreateBackpackOrnament()
-{
-    int ornament = CreateEntityByName("prop_dynamic_ornament");
-    if (ornament != -1)
-    {
-         // Setup ornament to use custom model.
-        g_backpack_type_ornament_models.GetString(backpack_type, model, sizeof(model));
-        DispatchKeyValueVector(ornament, "origin", pos);
-        DispatchKeyValue(ornament, "model", model);
-        DispatchKeyValue(ornament, "disableshadows", "1");
-        DispatchSpawn(ornament);       
-    }
-    return ornament;
 }
 
 void Frame_EnableGlow(int backpack_ref)
