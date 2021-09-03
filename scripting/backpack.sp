@@ -3470,7 +3470,7 @@ public Action Hook_BackpackPickup(
  */
 void HideEntity(int entity)
 {
-	float out_of_bounds[3] = { 32000.0, ... };
+	float out_of_bounds[3] = { 16383.0, ... };
 	TeleportEntity(entity, out_of_bounds, NULL_VECTOR, NULL_VECTOR);
 	AcceptEntityInput(entity, "DisableMotion");
 }
