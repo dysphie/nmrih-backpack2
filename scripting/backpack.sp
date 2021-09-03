@@ -2657,9 +2657,7 @@ bool IsBackpackTypeAdminOnly(int backpack_type)
  */
 bool IsBackpackTypeZombie(int backpack_type)
 {
-	int result = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ZOMBIES_WEAR);
-	PrintToServer("IsBackpackTypeZombie %d", result);
-	return !!result;
+	return g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ZOMBIES_WEAR);
 }
 
 int GetURandomIntInRange(int lo, int hi)
