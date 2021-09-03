@@ -28,14 +28,6 @@
 				"linux" "@_ZNK21CNMRiH_WeaponRegistry9GetWeaponEi"
 			}
 
-			"CBaseCombatCharacter::Weapon_OwnsThisType"
-			{
-				// bool (const char *, bool)
-				"library" "server"
-				"windows" "\x55\x8B\xEC\x51\x53\x8B\x5D\x08\x8B\xC1\x56\x57\x89\x45\xFC\x33\xFF"
-				"linux" "@_ZNK20CBaseCombatCharacter19Weapon_OwnsThisTypeEPKci"
-			}
-
 			"CNMRiH_Player::HasEnoughInventoryRoomForWeapon"
 			{
 				// bool (CBaseCombatWeapon *)
@@ -245,6 +237,13 @@
 
 		"Offsets"
 		{
+			"CNMRiH_BaseZombie::m_bCrawler"
+			{
+				// bool
+				"windows" "3756"
+				"linux" "3772"
+			}
+
 			"CBaseCombatWeapon::FallInit"
 			{
 				// void ()

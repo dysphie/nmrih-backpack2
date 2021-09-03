@@ -1,29 +1,30 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
-
+#include <autoexecconfig>
 #include <adminmenu>
-
 #include <dhooks>
 
 #pragma semicolon 1
 #pragma newdecls required
 
 // TODO: Let backpacks be dropped by helicopters.
-// TODO: Let backpacks randomly spawn as loot.
+// TODO: Pop stuff out of backpacks on plugin end
 
 #define ADMFLAG_BACKPACK ADMFLAG_SLAY   // Backpack commands require slay permissions.
 
-#define BACKPACK_VERSION "1.4.3"
+#define BACKPACK_VERSION "1.5.3"
 
 public Plugin myinfo =
 {
-    name = "[NMRiH] Backpack (Dysphie's Fork)",
-    author = "Ryan.",
-    description = "Portable inventory box.",
-    version = BACKPACK_VERSION,
-    url = "https://forums.alliedmods.net/showthread.php?t=308217"
+	name = "[NMRiH] Backpack (Dysphie's fork)",
+	author = "Ryan.",
+	description = "Portable inventory box.",
+	version = BACKPACK_VERSION,
+	url = "https://forums.alliedmods.net/showthread.php?t=308217"
 };
+
+#define MAXENTITIES 2048
 
 #define INT_MAX 0x7FFFFFFF
 
@@ -61,7 +62,7 @@ public Plugin myinfo =
 #define COLLISION_GROUP_ITEM 34
 
 #define FSOLID_TRIGGER 0x0008       // This is something that may be collideable but fires touch functions
-                                    // even when it's not collideable (when the FSOLID_NOT_SOLID flag is set)
+									// even when it's not collideable (when the FSOLID_NOT_SOLID flag is set)
 #define FSOLID_USE_TRIGGER_BOUNDS 0x0080    // Uses a special trigger bounds separate from the normal OBB
 #define FSOLID_TRIGGER_TOUCH_DEBRIS 0x0200  // This trigger will touch debris objects
 
@@ -95,58 +96,70 @@ public Plugin myinfo =
 #define HSV_S 1
 #define HSV_V 2
 
+#define EF_ITEM_BLINK 0x100
+
+StringMap g_backpack_npcs;
+
+enum eHighlightType
+{
+	HIGHLIGHT_NONE,
+	HIGHLIGHT_GLOW,
+	HIGHLIGHT_BLINK
+}
+
 enum eInventoryBoxCategory
 {
-    INVENTORY_BOX_CATEGORY_NONE = 0,  // Fists and zippo.
-    INVENTORY_BOX_CATEGORY_WEAPON = 1,
-    INVENTORY_BOX_CATEGORY_GEAR = 2,
-    INVENTORY_BOX_CATEGORY_AMMO = 3
+	INVENTORY_BOX_CATEGORY_NONE = 0,  // Fists and zippo.
+	INVENTORY_BOX_CATEGORY_WEAPON = 1,
+	INVENTORY_BOX_CATEGORY_GEAR = 2,
+	INVENTORY_BOX_CATEGORY_AMMO = 3
 };
 
 enum eCvarFlag
 {
-    CVAR_FLAG_DEFAULT,
-    CVAR_FLAG_YES,
-    CVAR_FLAG_NO
+	CVAR_FLAG_DEFAULT,
+	CVAR_FLAG_YES,
+	CVAR_FLAG_NO
 };
 
 // Instance information about a backpack.
 enum eBackpackTuple
 {
-    BACKPACK_ITEM_BOX,  // Reference to the item_inventory_box
-    BACKPACK_ORNAMENT,  // Reference to the prop_dynamic_ornament
-    BACKPACK_TYPE,      // Int index into g_backpack_types
+	BACKPACK_ITEM_BOX,  // Reference to the item_inventory_box
+	BACKPACK_ORNAMENT,  // Reference to the prop_dynamic_ornament
+	BACKPACK_TYPE,      // Int index into g_backpack_types
 
-    BACKPACK_TUPLE_SIZE
+	BACKPACK_TUPLE_SIZE
 };
 
 enum eBackpackTypeTuple
 {
-    BACKPACK_TYPE_WEIGHT,           // float: chance for backpack to be randomly selected when spawning
-    BACKPACK_TYPE_COLORIZE,         // eCvarFlag: how to colorize backpack
-    BACKPACK_TYPE_ONLY_ADMINS_WEAR, // eCvarFlag: whether this backpack is restricted to admins
-    BACKPACK_TYPE_ONLY_ADMINS_OPEN, // eCvarFlag: whether this backpack is restricted to admins
-    BACKPACK_TYPE_OPEN_SOUNDS,      // ArrayList of sound names: played when backpack is opened
-    BACKPACK_TYPE_WEAR_SOUNDS,      // ArrayList of sound names: played when backpack is worn
-    BACKPACK_TYPE_DROP_SOUNDS,      // ArrayList of sound names: played when backpack is dropped
-    BACKPACK_TYPE_ADD_SOUNDS,       // ArrayList of sound names: played when item is dropped into backpack
+	BACKPACK_TYPE_WEIGHT,           // float: chance for backpack to be randomly selected when spawning
+	BACKPACK_TYPE_COLORIZE,         // eCvarFlag: how to colorize backpack
+	BACKPACK_TYPE_ONLY_ADMINS_WEAR, // eCvarFlag: whether this backpack is restricted to admins
+	BACKPACK_TYPE_ONLY_ADMINS_OPEN, // eCvarFlag: whether this backpack is restricted to admins
+	BACKPACK_TYPE_ZOMBIES_WEAR,		// eCvarFlag: whether this backpack can spawn with zombies
+	BACKPACK_TYPE_OPEN_SOUNDS,      // ArrayList of sound names: played when backpack is opened
+	BACKPACK_TYPE_WEAR_SOUNDS,      // ArrayList of sound names: played when backpack is worn
+	BACKPACK_TYPE_DROP_SOUNDS,      // ArrayList of sound names: played when backpack is dropped
+	BACKPACK_TYPE_ADD_SOUNDS,       // ArrayList of sound names: played when item is dropped into backpack
 
-    BACKPACK_TYPE_TUPLE_SIZE
+	BACKPACK_TYPE_TUPLE_SIZE
 };
 
 enum eWeaponRegistryTuple
 {
-    WEAPON_REGISTRY_CATEGORY,
-    WEAPON_REGISTRY_AMMO_ID,
+	WEAPON_REGISTRY_CATEGORY,
+	WEAPON_REGISTRY_AMMO_ID,
 
-    WEAPON_REGISTRY_TUPLE_SIZE
+	WEAPON_REGISTRY_TUPLE_SIZE
 };
 
 enum eRoundState
 {
-    ROUND_STATE_RESTARTING,
-    ROUND_STATE_WAITING,
-    ROUND_STATE_STARTED
+	ROUND_STATE_RESTARTING,
+	ROUND_STATE_WAITING,
+	ROUND_STATE_STARTED
 };
 
 static const char ADMINMENU_BACKPACKCOMMANDS[] = "BackpackCommands";
@@ -155,14 +168,13 @@ static const char ITEM_AMMO_BOX[] = "item_ammo_box";
 static const char ME_FISTS[] = "me_fists";
 static const char BACKPACK_ITEMBOX_TARGETNAME[] = "38fc99d2";   // Something unique.
 
-static const float ZERO_VEC[3] = { 0.0, ... };
-
 bool g_plugin_loaded_late = false;
 
 eRoundState g_round_state = ROUND_STATE_RESTARTING;
 int g_next_backpack_hue = 0;
 
-int g_player_backpacks[MAXPLAYERS + 1];         // Ent ref of backpack player is currently holding.
+// TODO: use a StringMap for g_character_backpacks
+int g_character_backpacks[MAXENTITIES + 1] = {-1, ...};         // Ent ref of backpack player or NPC is currently holding.
 bool g_player_fists_equipped[MAXPLAYERS + 1];
 
 int g_player_and_backpack_trace_index = -1;     // Index of backpack hit by last Trace_PlayerAndBackpack call (index into g_backpacks).
@@ -182,13 +194,14 @@ int g_offset_itembox_item_count;
 int g_offset_itembox_ammo_array;
 int g_offset_itembox_gear_array;
 int g_offset_itembox_weapon_array;
+int g_offset_zombie_iscrawler;
 
 Handle g_detour_baseentity_start_fade_out;
 Handle g_detour_itembox_player_take_items;
 Handle g_detour_ammobox_fall_init;
 Handle g_detour_ammobox_fall_think;
-Handle g_detour_player_get_speed_factor;
 Handle g_detour_flare_projectile_explode;
+Handle g_detour_player_get_speed_factor;
 
 Handle g_dhook_weaponbase_fall_init;
 Handle g_dhook_weaponbase_fall_think;
@@ -200,9 +213,7 @@ Handle g_sdkcall_ammobox_get_max_ammo;
 Handle g_sdkcall_itembox_add_item;
 Handle g_sdkcall_itembox_end_use_for_player;
 Handle g_sdkcall_itembox_end_use_for_all_players;
-Handle g_sdkcall_player_owns_weapon_type;
 Handle g_sdkcall_player_get_ammo_weight;
-Handle g_sdkcall_entity_is_combat_weapon;
 Handle g_sdkcall_weapon_get_weight;
 
 ArrayList g_backpack_types;
@@ -228,15 +239,18 @@ ConVar g_cvar_backpack_ammo_stack_limit;    // Number of ammo pickups that can b
 ConVar g_cvar_backpack_only_admins_can_wear;// Forbid non-admin players from picking up backpacks.
 ConVar g_cvar_backpack_only_admins_can_open;// Forbid non-admin players form opening backpacks.
 ConVar g_cvar_backpack_colorize;            // Whether to randomize backpack colors.
-ConVar g_cvar_backpack_glow;                // Whether to glow backpacks.
 ConVar g_cvar_backpack_glow_blip;           // Whether to add backpacks to compass
 ConVar g_cvar_backpack_glow_dist;           // Range of backpack glow
+ConVar g_cvar_backpack_glow_type;
 
 ConVar g_cvar_backpack_speed;
 ConVar g_cvar_backpack_speedfactor_norm;
 ConVar g_cvar_backpack_speedfactor_half;
 ConVar g_cvar_backpack_speedfactor_full;
+
+ConVar g_cvar_backpack_supply_drop_cooldown;    // Number of seconds between airdrops players must wait.
 ConVar g_cvar_backpack_keep_supply_drops;       // When true, supply drops won't automatically fade out when another one is created.
+ConVar g_cvar_backpack_npc_chance;
 
 ConVar g_inv_maxcarry;
 
@@ -250,92 +264,92 @@ ConVar g_inv_maxcarry;
  * Native signature:
  * void CBaseEntity::SUB_StartFadeOut(float, bool)
  */
-public MRESReturn Detour_BaseEntity_StartFadeOut(int entity, Handle params)
+MRESReturn Detour_BaseEntity_StartFadeOut(int entity)
 {
-    MRESReturn result = MRES_Ignored;
+	MRESReturn result = MRES_Ignored;
 
-    if (IsValidEntity(entity))
-    {
-        int ent_ref = EntIndexToEntRef(entity);
-        if (g_backpacks.FindValue(ent_ref, BACKPACK_ITEM_BOX) != -1)
-        {
-            // Don't fade out backpacks.
-            result = MRES_Supercede;
-        }
-        else if (g_cvar_backpack_keep_supply_drops.BoolValue &&
-            GetEntData(entity, g_offset_itembox_item_count, SIZEOF_INT) > 0)
-        {
-            // Don't fade out inventory boxes with items.
-            result = MRES_Supercede;
-        }
-    }
+	if (IsValidEntity(entity))
+	{
+		int ent_ref = EntIndexToEntRef(entity);
+		if (g_backpacks.FindValue(ent_ref, BACKPACK_ITEM_BOX) != -1)
+		{
+			// Don't fade out backpacks.
+			result = MRES_Supercede;
+		}
+		else if (g_cvar_backpack_keep_supply_drops.BoolValue &&
+			GetEntData(entity, g_offset_itembox_item_count, SIZEOF_INT) > 0)
+		{
+			// Don't fade out inventory boxes with items.
+			result = MRES_Supercede;
+		}
+	}
 
-    return result;
+	return result;
 }
 
 /**
  * Pre-hook detour. Necessary for post-hook detour.
  */
-public MRESReturn Detour_BaseItem_FallInit(int item)
+MRESReturn Detour_BaseItem_FallInit()
 {
-    return MRES_Ignored;
+	return MRES_Ignored;
 }
 
 /**
  * Remove trigger flag on item so it can interact with our backpack trigger.
  */
-public MRESReturn Detour_BaseItem_FallInitPost(int item)
+MRESReturn Detour_BaseItem_FallInitPost(int item)
 {
-    // Don't do this when the player is on a ladder because the item will
-    // knock them off.
-    int owner = GetEntOwner(item);
-    if (owner == -1 || GetEntityMoveType(owner) != MOVETYPE_LADDER)
-    {
-        int solid_flags = GetEntProp(item, Prop_Send, "m_usSolidFlags");
-        solid_flags &= ~(FSOLID_TRIGGER | FSOLID_USE_TRIGGER_BOUNDS);
-        SetEntProp(item, Prop_Send, "m_usSolidFlags", solid_flags);
+	// Don't do this when the player is on a ladder because the item will
+	// knock them off.
+	int owner = GetEntOwner(item);
+	if (owner == -1 || GetEntityMoveType(owner) != MOVETYPE_LADDER)
+	{
+		int solid_flags = GetEntProp(item, Prop_Send, "m_usSolidFlags");
+		solid_flags &= ~(FSOLID_TRIGGER | FSOLID_USE_TRIGGER_BOUNDS);
+		SetEntProp(item, Prop_Send, "m_usSolidFlags", solid_flags);
 
-        if (HasEntProp(item, Prop_Send, "m_triggerBloat"))
-        {
-            SetEntProp(item, Prop_Send, "m_triggerBloat", 0);
-        }
+		if (HasEntProp(item, Prop_Send, "m_triggerBloat"))
+		{
+			SetEntProp(item, Prop_Send, "m_triggerBloat", 0);
+		}
 
-        SDKCall(g_sdkcall_baseentity_set_collision_group, item, COLLISION_GROUP_DEBRIS);
-    }
-    return MRES_Ignored;
+		SDKCall(g_sdkcall_baseentity_set_collision_group, item, COLLISION_GROUP_DEBRIS);
+	}
+	return MRES_Ignored;
 }
 
 /**
  * Pre-hook detour. Necessary for post-hook detour.
  */
-public MRESReturn Detour_BaseItem_FallThink(int item)
+MRESReturn Detour_BaseItem_FallThink()
 {
-    return MRES_Ignored;
+	return MRES_Ignored;
 }
 
 /**
  * Move items to debris collision group.
  */
-public MRESReturn Detour_BaseItem_FallThinkPost(int item)
+MRESReturn Detour_BaseItem_FallThinkPost(int item)
 {
-    SDKCall(g_sdkcall_baseentity_set_collision_group, item, COLLISION_GROUP_DEBRIS);
-    return MRES_Ignored;
+	SDKCall(g_sdkcall_baseentity_set_collision_group, item, COLLISION_GROUP_DEBRIS);
+	return MRES_Ignored;
 }
 
 /**
  * Move weapons to debris collision group and deflate expanded trigger bounds.
  */
-public MRESReturn DHook_WeaponBase_FallInitPost(int weapon)
+MRESReturn DHook_WeaponBase_FallInitPost(int weapon)
 {
-    return Detour_BaseItem_FallInitPost(weapon);
+	return Detour_BaseItem_FallInitPost(weapon);
 }
 
 /**
  * Move weapons to debris collision group.
  */
-public MRESReturn DHook_WeaponBase_FallThinkPost(int weapon)
+MRESReturn DHook_WeaponBase_FallThinkPost(int weapon)
 {
-    return Detour_BaseItem_FallThinkPost(weapon);
+	return Detour_BaseItem_FallThinkPost(weapon);
 }
 
 /**
@@ -344,29 +358,29 @@ public MRESReturn DHook_WeaponBase_FallThinkPost(int weapon)
  */
 MRESReturn Detour_FlareProjectile_Explode()
 {
-    int max_backpacks = g_backpacks.Length;
-    for (int i = 0; i < max_backpacks; i++)
-    {
-        int backpack_ref = g_backpacks.Get(i, BACKPACK_ITEM_BOX);
-        int backpack = EntRefToEntIndex(backpack_ref);
+	int max_backpacks = g_backpacks.Length;
+	for (int i = 0; i < max_backpacks; i++)
+	{
+		int backpack_ref = g_backpacks.Get(i, BACKPACK_ITEM_BOX);
+		int backpack = EntRefToEntIndex(backpack_ref);
 
-        if (backpack != -1)
-        {
-            SetEntPropString(backpack, Prop_Data, "m_iClassname", "backpack");
-            RequestFrame(Frame_RestoreRealClassname, backpack_ref);
-        }
-    }
+		if (backpack != -1)
+		{
+			SetEntPropString(backpack, Prop_Data, "m_iClassname", "backpack");
+			RequestFrame(Frame_RestoreRealClassname, backpack_ref);
+		}
+	}
 
-    return MRES_Ignored;
+	return MRES_Ignored;
 }
 
 void Frame_RestoreRealClassname(int backpack_ref)
 {
-    int backpack_index = EntRefToEntIndex(backpack_ref);
-    if (backpack_index != -1)
-    {
-        SetEntPropString(backpack_index, Prop_Data, "m_iClassname", "item_inventory_box");
-    }
+	int backpack_index = EntRefToEntIndex(backpack_ref);
+	if (backpack_index != -1)
+	{
+		SetEntPropString(backpack_index, Prop_Data, "m_iClassname", "item_inventory_box");
+	}
 }
 
 /**
@@ -375,9 +389,9 @@ void Frame_RestoreRealClassname(int backpack_ref)
  * Native signature:
  * float CNMRiH_Player::GetWeightSpeedFactor()
  */
-public MRESReturn Detour_Player_GetWeightSpeedFactor()
+MRESReturn Detour_Player_GetWeightSpeedFactor()
 {
-    return MRES_Ignored;
+	return MRES_Ignored;
 }
 
 /**
@@ -386,43 +400,43 @@ public MRESReturn Detour_Player_GetWeightSpeedFactor()
  * Native signature:
  * float CNMRiH_Player::GetWeightSpeedFactor()
  */
-public MRESReturn Detour_Player_GetWeightSpeedFactorPost(int client, Handle return_handle)
+MRESReturn Detour_Player_GetWeightSpeedFactorPost(int client, Handle return_handle)
 {
-    MRESReturn result = MRES_Ignored;
+	MRESReturn result = MRES_Ignored;
 
-    if (g_cvar_backpack_speed.BoolValue)
-    {
-        int backpack_ref = g_player_backpacks[client];
-        int backpack = EntRefToEntIndex(backpack_ref);
-        if (backpack != INVALID_ENT_REFERENCE)
-        {
-            int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-            if (backpack_index != -1)
-            {
-                int item_count = GetEntData(backpack, g_offset_itembox_item_count, SIZEOF_INT);
-                float fill_ratio = item_count / float(ITEMBOX_TOTAL_SLOTS);
+	if (g_cvar_backpack_speed.BoolValue)
+	{
+		int backpack_ref = g_character_backpacks[client];
+		int backpack = EntRefToEntIndex(backpack_ref);
+		if (backpack != INVALID_ENT_REFERENCE)
+		{
+			int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+			if (backpack_index != -1)
+			{
+				int item_count = GetEntData(backpack, g_offset_itembox_item_count, SIZEOF_INT);
+				float fill_ratio = item_count / float(ITEMBOX_TOTAL_SLOTS);
 
-                float factor = DHookGetReturn(return_handle);
-                if (fill_ratio >= 1.0)
-                {
-                    factor *= g_cvar_backpack_speedfactor_full.FloatValue;
-                }
-                else if (fill_ratio >= 0.5)
-                {
-                    factor *= g_cvar_backpack_speedfactor_half.FloatValue;
-                }
-                else
-                {
-                    factor *= g_cvar_backpack_speedfactor_norm.FloatValue;
-                }
+				float factor = DHookGetReturn(return_handle);
+				if (fill_ratio >= 1.0)
+				{
+					factor *= g_cvar_backpack_speedfactor_full.FloatValue;
+				}
+				else if (fill_ratio >= 0.5)
+				{
+					factor *= g_cvar_backpack_speedfactor_half.FloatValue;
+				}
+				else
+				{
+					factor *= g_cvar_backpack_speedfactor_norm.FloatValue;
+				}
 
-                DHookSetReturn(return_handle, factor);
-                result = MRES_Override;
-            }
-        }
-    }
+				DHookSetReturn(return_handle, factor);
+				result = MRES_Override;
+			}
+		}
+	}
 
-    return result;
+	return result;
 }
 
 /**
@@ -432,11 +446,11 @@ public MRESReturn Detour_Player_GetWeightSpeedFactorPost(int client, Handle retu
  */
 void ItemBoxItemTaken(eInventoryBoxCategory category, int slot)
 {
-    Handle message = StartMessageAll("ItemBoxItemTaken", USERMSG_RELIABLE);
-    BfWrite buffer = UserMessageToBfWrite(message);
-    buffer.WriteShort(category);
-    buffer.WriteShort(slot);
-    EndMessage();
+	Handle message = StartMessageAll("ItemBoxItemTaken", USERMSG_RELIABLE);
+	BfWrite buffer = UserMessageToBfWrite(message);
+	buffer.WriteShort(category);
+	buffer.WriteShort(slot);
+	EndMessage();
 }
 
 /**
@@ -444,7 +458,21 @@ void ItemBoxItemTaken(eInventoryBoxCategory category, int slot)
  */
 bool PlayerOwnsItemType(int client, const char[] classname)
 {
-    return SDKCall(g_sdkcall_player_owns_weapon_type, client, classname, 0) != -1;
+	static char buffer[32];
+
+	int maxWeapons = GetEntPropArraySize(client, Prop_Send, "m_hMyWeapons");
+	for (int i; i < maxWeapons; i++)
+	{
+		int weapon = GetEntPropEnt(client, Prop_Send, "m_hMyWeapons", i);
+		if (weapon != -1)
+		{
+			GetEntityClassname(weapon, buffer, sizeof(buffer));
+			if (StrEqual(classname, buffer))
+				return true;
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -456,87 +484,87 @@ bool PlayerOwnsItemType(int client, const char[] classname)
  * Native signature:
  * void CItem_InventoryBox::PlayerTakeItems(CBasePlayer *player, int weapon, int gear, int ammo)
  */
-public MRESReturn Detour_ItemBox_PlayerTakeItems(int item_box, Handle params)
+MRESReturn Detour_ItemBox_PlayerTakeItems(int item_box, Handle params)
 {
-    int client = DHookGetParam(params, 1);
-    int weapon_slot = DHookGetParam(params, 2);
-    int gear_slot = DHookGetParam(params, 3);
-    int ammo_slot = DHookGetParam(params, 4);
+	int client = DHookGetParam(params, 1);
+	int weapon_slot = DHookGetParam(params, 2);
+	int gear_slot = DHookGetParam(params, 3);
+	int ammo_slot = DHookGetParam(params, 4);
 
-    int backpack_ref = EntIndexToEntRef(item_box);
-    int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+	int backpack_ref = EntIndexToEntRef(item_box);
+	int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
 
-    if (backpack_index != -1 &&
-        g_sdkcall_itembox_end_use_for_player)
-    {
-        int category = 0;
-        char classname[CLASSNAME_MAX];
+	if (backpack_index != -1 &&
+		g_sdkcall_itembox_end_use_for_player)
+	{
+		int category = 0;
+		char classname[CLASSNAME_MAX];
 
-        if (weapon_slot != -1)
-        {
-            int offset = g_offset_itembox_weapon_array + SIZEOF_INT * weapon_slot;
-            int id = GetEntData(item_box, offset, SIZEOF_INT);
+		if (weapon_slot != -1)
+		{
+			int offset = g_offset_itembox_weapon_array + SIZEOF_INT * weapon_slot;
+			int id = GetEntData(item_box, offset, SIZEOF_INT);
 
-            if (GetWeaponByID(id, category, classname, sizeof(classname)) &&
-                !PlayerOwnsItemType(client, classname))
-            {
-                int clip = g_backpack_clips.Get(backpack_index, weapon_slot);
-                if (CreateBackpackItemFor(client, classname, clip))
-                {
-                    InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_WEAPON, weapon_slot);
-                    ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_WEAPON, weapon_slot);
-                }
-            }
-        }
+			if (GetWeaponByID(id, category, classname, sizeof(classname)) &&
+				!PlayerOwnsItemType(client, classname))
+			{
+				int clip = g_backpack_clips.Get(backpack_index, weapon_slot);
+				if (CreateBackpackItemFor(client, classname, clip))
+				{
+					InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_WEAPON, weapon_slot);
+					ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_WEAPON, weapon_slot);
+				}
+			}
+		}
 
-        if (gear_slot != -1)
-        {
-            int offset = g_offset_itembox_gear_array + SIZEOF_INT * gear_slot;
-            int id = GetEntData(item_box, offset, SIZEOF_INT);
+		if (gear_slot != -1)
+		{
+			int offset = g_offset_itembox_gear_array + SIZEOF_INT * gear_slot;
+			int id = GetEntData(item_box, offset, SIZEOF_INT);
 
-            if (GetWeaponByID(id, category, classname, sizeof(classname)) &&
-                !PlayerOwnsItemType(client, classname))
-            {
-                int clip = g_backpack_gear_clips.Get(backpack_index, gear_slot);
-                if (CreateBackpackItemFor(client, classname, clip))
-                {
-                    InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_GEAR, gear_slot);
-                    ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_GEAR, gear_slot);
-                }
-            }
-        }
+			if (GetWeaponByID(id, category, classname, sizeof(classname)) &&
+				!PlayerOwnsItemType(client, classname))
+			{
+				int clip = g_backpack_gear_clips.Get(backpack_index, gear_slot);
+				if (CreateBackpackItemFor(client, classname, clip))
+				{
+					InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_GEAR, gear_slot);
+					ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_GEAR, gear_slot);
+				}
+			}
+		}
 
-        if (ammo_slot != -1)
-        {
-            int offset = g_offset_itembox_ammo_array + SIZEOF_INT * ammo_slot;
-            int id = GetEntData(item_box, offset, SIZEOF_INT);
+		if (ammo_slot != -1)
+		{
+			int offset = g_offset_itembox_ammo_array + SIZEOF_INT * ammo_slot;
+			int id = GetEntData(item_box, offset, SIZEOF_INT);
 
-            if (GetWeaponByID(id, category, classname, sizeof(classname)))
-            {
-                int stored = g_backpack_ammos.Get(backpack_index, ammo_slot);
-                int ammo_box = -1;
+			if (GetWeaponByID(id, category, classname, sizeof(classname)))
+			{
+				int stored = g_backpack_ammos.Get(backpack_index, ammo_slot);
+				int ammo_box = -1;
 
-                // Spawn ammo pickups until player can't hold more or slot is depleted.
-                do
-                {
-                    ammo_box = CreateBackpackAmmoFor(client, classname, stored);
-                    g_backpack_ammos.Set(backpack_index, stored, ammo_slot);
-                } while (stored > 0 && ammo_box != -1);
+				// Spawn ammo pickups until player can't hold more or slot is depleted.
+				do
+				{
+					ammo_box = CreateBackpackAmmoFor(client, classname, stored);
+					g_backpack_ammos.Set(backpack_index, stored, ammo_slot);
+				} while (stored > 0 && ammo_box != -1);
 
-                // Clear ammo after everything is taken.
-                if (stored <= 0)
-                {
-                    InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_AMMO, ammo_slot);
-                    ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_AMMO, ammo_slot);
-                }
-            }
-        }
+				// Clear ammo after everything is taken.
+				if (stored <= 0)
+				{
+					InventoryBox_RemoveItem(item_box, INVENTORY_BOX_CATEGORY_AMMO, ammo_slot);
+					ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_AMMO, ammo_slot);
+				}
+			}
+		}
 
-        // Close the backpack GUI.
-        SDKCall(g_sdkcall_itembox_end_use_for_player, item_box, client);
-    }
+		// Close the backpack GUI.
+		SDKCall(g_sdkcall_itembox_end_use_for_player, item_box, client);
+	}
 
-    return backpack_index == -1 ? MRES_Ignored : MRES_Supercede;
+	return backpack_index == -1 ? MRES_Ignored : MRES_Supercede;
 }
 
 /**
@@ -544,147 +572,179 @@ public MRESReturn Detour_ItemBox_PlayerTakeItems(int item_box, Handle params)
  */
 void LoadPluginConfig()
 {
-    char file_path[PLATFORM_MAX_PATH];
-    BuildPath(Path_SM, file_path, sizeof(file_path), "configs/backpack.cfg");
+	char file_path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, file_path, sizeof(file_path), "configs/backpack.cfg");
 
-    bool read_registry = false;
+	bool read_registry = false;
 
-    KeyValues kv = new KeyValues("backpack");
-    if (kv && kv.ImportFromFile(file_path))
-    {
-        LoadBackpackTypes(kv);
-        read_registry = LoadWeaponRegistry(kv);
-    }
-    else
-    {
-        SetFailState("Failed to open or read %s", file_path);
-    }
+	KeyValues kv = new KeyValues("backpack");
+	if (kv && kv.ImportFromFile(file_path))
+	{
+		LoadBackpackTypes(kv);
+		LoadBackpackZombies(kv);
+		read_registry = LoadWeaponRegistry(kv);
+	}
+	else
+	{
+		SetFailState("Failed to open or read %s", file_path);
+	}
 
-    if (kv)
-    {
-        delete kv;
-    }
+	delete kv;
 
-    if (g_backpack_types.Length <= 0)
-    {
-        SetFailState("Failed to read any backpack types from %s", file_path);
-    }
-    if (!read_registry)
-    {
-        SetFailState("Failed to read weapon registry from %s", file_path);
-    }
+	if (g_backpack_types.Length <= 0)
+	{
+		SetFailState("Failed to read any backpack types from %s", file_path);
+	}
+	if (!read_registry)
+	{
+		SetFailState("Failed to read weapon registry from %s", file_path);
+	}
 }
 
 bool KeyValueGetCvarFlag(KeyValues kv, const char[] key, char[] buffer, int buffer_size, eCvarFlag &flag)
 {
-    bool read = true;
+	bool read = true;
 
-    kv.GetString(key, buffer, buffer_size, "");
+	kv.GetString(key, buffer, buffer_size, "");
 
-    if (StrEqual(buffer, "yes", CASE_INSENSITIVE) ||
-        StrEqual(buffer, "true", CASE_INSENSITIVE))
-    {
-        flag = CVAR_FLAG_YES;
-    }
-    else if (StrEqual(buffer, "no", CASE_INSENSITIVE) ||
-        StrEqual(buffer, "false", CASE_INSENSITIVE))
-    {
-        flag = CVAR_FLAG_NO;
-    }
-    else if (buffer[0] == '\0' ||
-        StrEqual(buffer, "default", CASE_INSENSITIVE))
-    {
-        flag = CVAR_FLAG_DEFAULT;
-    }
-    else
-    {
-        read = false;
-    }
+	if (StrEqual(buffer, "yes", CASE_INSENSITIVE) ||
+		StrEqual(buffer, "true", CASE_INSENSITIVE))
+	{
+		flag = CVAR_FLAG_YES;
+	}
+	else if (StrEqual(buffer, "no", CASE_INSENSITIVE) ||
+		StrEqual(buffer, "false", CASE_INSENSITIVE))
+	{
+		flag = CVAR_FLAG_NO;
+	}
+	else if (buffer[0] == '\0' ||
+		StrEqual(buffer, "default", CASE_INSENSITIVE))
+	{
+		flag = CVAR_FLAG_DEFAULT;
+	}
+	else
+	{
+		read = false;
+	}
 
-    return read;
+	return read;
+}
+
+void LoadBackpackZombies(KeyValues kv)
+{
+	g_backpack_npcs.Clear();
+
+	if (kv.JumpToKey("backpack_npcs"))
+	{
+		if (kv.GotoFirstSubKey(false))
+		{
+			do
+			{
+				// TODO: We could PrecacheModel here and compare to
+				// zombie's m_nModelIndex later instead of the full str
+
+				char model[PLATFORM_MAX_PATH];
+				kv.GetString(NULL_STRING, model, sizeof(model));
+				if (model[0])
+					g_backpack_npcs.SetValue(model, true);
+			}
+			while (kv.GotoNextKey(false));
+
+			kv.GoBack();
+		}
+
+		kv.GoBack();
+	}
 }
 
 void LoadBackpackTypes(KeyValues kv)
 {
-    if (kv.JumpToKey("backpack_types"))
-    {
-        if (kv.GotoFirstSubKey(KV_KEYS_ONLY))
-        {
-            char backpack_name[CLASSNAME_MAX];
-            char buffer[PLATFORM_MAX_PATH];
+	if (kv.JumpToKey("backpack_types"))
+	{
+		if (kv.GotoFirstSubKey(KV_KEYS_ONLY))
+		{
+			char backpack_name[CLASSNAME_MAX];
+			char buffer[PLATFORM_MAX_PATH];
 
-            do
-            {
-                // Get backpack name. Make it unique by appending a number.
-                kv.GetSectionName(backpack_name, sizeof(backpack_name));
-                int len = strlen(backpack_name);
-                int attempt = 1;
-                while (g_backpack_type_names.FindString(backpack_name) != -1)
-                {
-                    IntToString(attempt, backpack_name[len], sizeof(backpack_name) - len);
-                    ++attempt;
-                }
-                g_backpack_type_names.PushString(backpack_name);
-                //PrintToServer("== Backpack: %s", backpack_name);
+			do
+			{
+				// Get backpack name. Make it unique by appending a number.
+				kv.GetSectionName(backpack_name, sizeof(backpack_name));
+				int len = strlen(backpack_name);
+				int attempt = 1;
+				while (g_backpack_type_names.FindString(backpack_name) != -1)
+				{
+					IntToString(attempt, backpack_name[len], sizeof(backpack_name) - len);
+					++attempt;
+				}
+				g_backpack_type_names.PushString(backpack_name);
+				//PrintToServer("== Backpack: %s", backpack_name);
 
-                float weight = kv.GetFloat("weight", 100.0);
-                if (weight < 0.0)
-                {
-                    weight = 0.0;
-                }
-                //PrintToServer("  == weight: %f", weight);
+				float weight = kv.GetFloat("weight", 100.0);
+				if (weight < 0.0)
+				{
+					weight = 0.0;
+				}
+				//PrintToServer("  == weight: %f", weight);
 
-                eCvarFlag colorize = CVAR_FLAG_DEFAULT;
-                if (!KeyValueGetCvarFlag(kv, "colorize", buffer, sizeof(buffer), colorize))
-                {
-                    LogMessage("Warning: Backpack type '%s' has unknown colorize value: %s", backpack_name, buffer);
-                }
+				eCvarFlag colorize = CVAR_FLAG_DEFAULT;
+				if (!KeyValueGetCvarFlag(kv, "colorize", buffer, sizeof(buffer), colorize))
+				{
+					LogMessage("Warning: Backpack type '%s' has unknown colorize value: %s", backpack_name, buffer);
+				}
 
-                eCvarFlag only_admins_wear = CVAR_FLAG_DEFAULT;
-                if (!KeyValueGetCvarFlag(kv, "only_admins_can_wear", buffer, sizeof(buffer), only_admins_wear))
-                {
-                    LogMessage("Warning: Backpack type '%s' has unknown only_admins_can_wear value: %s", backpack_name, buffer);
-                }
+				eCvarFlag only_admins_wear = CVAR_FLAG_DEFAULT;
+				if (!KeyValueGetCvarFlag(kv, "only_admins_can_wear", buffer, sizeof(buffer), only_admins_wear))
+				{
+					LogMessage("Warning: Backpack type '%s' has unknown only_admins_can_wear value: %s", backpack_name, buffer);
+				}
 
-                eCvarFlag only_admins_open = CVAR_FLAG_DEFAULT;
-                if (!KeyValueGetCvarFlag(kv, "only_admins_can_open", buffer, sizeof(buffer), only_admins_open))
-                {
-                    LogMessage("Warning: Backpack type '%s' has unknown only_admins_can_open value: %s", backpack_name, buffer);
-                }
+				eCvarFlag only_admins_open = CVAR_FLAG_DEFAULT;
+				if (!KeyValueGetCvarFlag(kv, "only_admins_can_open", buffer, sizeof(buffer), only_admins_open))
+				{
+					LogMessage("Warning: Backpack type '%s' has unknown only_admins_can_open value: %s", backpack_name, buffer);
+				}
 
-                kv.GetString("itembox_model", buffer, sizeof(buffer), "models/survival/item_dufflebag.mdl");
-                AddModelToDownloadsTable(buffer);
-                g_backpack_type_itembox_models.PushString(buffer);
-                //PrintToServer("  == itembox: %s", buffer);
+				eCvarFlag zombies_can_wear = CVAR_FLAG_NO;
+				if (!KeyValueGetCvarFlag(kv, "zombies_can_wear", buffer, sizeof(buffer), zombies_can_wear))
+				{
+					LogMessage("Warning: Backpack type '%s' has unknown zombies_can_wear value: %s", backpack_name, buffer);
+				}
 
-                kv.GetString("ornament_model", buffer, sizeof(buffer), "models/survival/item_dufflebag_backpack.mdl");
-                AddModelToDownloadsTable(buffer);
-                g_backpack_type_ornament_models.PushString(buffer);
-                //PrintToServer("  == ornament: %s", buffer);
+				kv.GetString("itembox_model", buffer, sizeof(buffer), "models/survival/item_dufflebag.mdl");
+				AddModelToDownloadsTable(buffer);
+				g_backpack_type_itembox_models.PushString(buffer);
+				//PrintToServer("  == itembox: %s", buffer);
 
-                int tuple[BACKPACK_TYPE_TUPLE_SIZE];
-                tuple[BACKPACK_TYPE_WEIGHT] = view_as<int>(weight);
-                tuple[BACKPACK_TYPE_COLORIZE] = colorize;
-                tuple[BACKPACK_TYPE_ONLY_ADMINS_OPEN] = only_admins_open;
-                tuple[BACKPACK_TYPE_ONLY_ADMINS_WEAR] = only_admins_wear;
-                tuple[BACKPACK_TYPE_OPEN_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
-                tuple[BACKPACK_TYPE_WEAR_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
-                tuple[BACKPACK_TYPE_DROP_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
-                tuple[BACKPACK_TYPE_ADD_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
+				kv.GetString("ornament_model", buffer, sizeof(buffer), "models/survival/item_dufflebag_backpack.mdl");
+				AddModelToDownloadsTable(buffer);
+				g_backpack_type_ornament_models.PushString(buffer);
+				//PrintToServer("  == ornament: %s", buffer);
 
-                LoadBackpackTypeSounds(kv, tuple);
+				int tuple[BACKPACK_TYPE_TUPLE_SIZE];
+				tuple[BACKPACK_TYPE_WEIGHT] = view_as<int>(weight);
+				tuple[BACKPACK_TYPE_COLORIZE] = colorize;
+				tuple[BACKPACK_TYPE_ONLY_ADMINS_OPEN] = only_admins_open;
+				tuple[BACKPACK_TYPE_ONLY_ADMINS_WEAR] = only_admins_wear;
+				tuple[BACKPACK_TYPE_ZOMBIES_WEAR] = zombies_can_wear;
+				tuple[BACKPACK_TYPE_OPEN_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
+				tuple[BACKPACK_TYPE_WEAR_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
+				tuple[BACKPACK_TYPE_DROP_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
+				tuple[BACKPACK_TYPE_ADD_SOUNDS] = view_as<int>(new ArrayList(PLATFORM_MAX_PATH, 0));
 
-                int index = g_backpack_types.PushArray(tuple);
-                g_backpack_type_name_lookup.SetValue(backpack_name, index);
-                //PrintToServer("  == index: %d", index);
+				LoadBackpackTypeSounds(kv, tuple);
 
-            } while (kv.GotoNextKey(KV_KEYS_ONLY));
+				int index = g_backpack_types.PushArray(tuple);
+				g_backpack_type_name_lookup.SetValue(backpack_name, index);
+				//PrintToServer("  == index: %d", index);
 
-            kv.GoBack();
-        }
+			} while (kv.GotoNextKey(KV_KEYS_ONLY));
 
-        kv.GoBack();
-    }
+			kv.GoBack();
+		}
+
+		kv.GoBack();
+	}
 }
 
 /**
@@ -692,15 +752,15 @@ void LoadBackpackTypes(KeyValues kv)
  */
 void LoadBackpackTypeSounds(KeyValues kv, int backpack_type[BACKPACK_TYPE_TUPLE_SIZE])
 {
-    if (kv.JumpToKey("sounds"))
-    {
-        LoadSoundArray(kv, "backpack_open", TupleGetArrayList(backpack_type, BACKPACK_TYPE_OPEN_SOUNDS));
-        LoadSoundArray(kv, "backpack_add", TupleGetArrayList(backpack_type, BACKPACK_TYPE_ADD_SOUNDS));
-        LoadSoundArray(kv, "backpack_wear", TupleGetArrayList(backpack_type, BACKPACK_TYPE_WEAR_SOUNDS));
-        LoadSoundArray(kv, "backpack_drop", TupleGetArrayList(backpack_type, BACKPACK_TYPE_DROP_SOUNDS));
+	if (kv.JumpToKey("sounds"))
+	{
+		LoadSoundArray(kv, "backpack_open", TupleGetArrayList(backpack_type, BACKPACK_TYPE_OPEN_SOUNDS));
+		LoadSoundArray(kv, "backpack_add", TupleGetArrayList(backpack_type, BACKPACK_TYPE_ADD_SOUNDS));
+		LoadSoundArray(kv, "backpack_wear", TupleGetArrayList(backpack_type, BACKPACK_TYPE_WEAR_SOUNDS));
+		LoadSoundArray(kv, "backpack_drop", TupleGetArrayList(backpack_type, BACKPACK_TYPE_DROP_SOUNDS));
 
-        kv.GoBack();
-    }
+		kv.GoBack();
+	}
 }
 
 /**
@@ -710,40 +770,40 @@ void LoadBackpackTypeSounds(KeyValues kv, int backpack_type[BACKPACK_TYPE_TUPLE_
  */
 void LoadSoundArray(KeyValues kv, const char[] key, ArrayList sounds)
 {
-    if (kv.JumpToKey(key))
-    {
-        if (kv.GotoFirstSubKey(KV_VALUES_ONLY))
-        {
-            char sound_name[PLATFORM_MAX_PATH];
-            //PrintToServer("  == sound type: %s", key);
+	if (kv.JumpToKey(key))
+	{
+		if (kv.GotoFirstSubKey(KV_VALUES_ONLY))
+		{
+			char sound_name[PLATFORM_MAX_PATH];
+			//PrintToServer("  == sound type: %s", key);
 
-            do
-            {
-                // Encode the sounds layer count at the start of the
-                // string.
-                sound_name[1] = '\0';
-                kv.GetSectionName(sound_name[1], sizeof(sound_name) - 1);
-                int layers = kv.GetNum(NULL_STRING, 1);
+			do
+			{
+				// Encode the sounds layer count at the start of the
+				// string.
+				sound_name[1] = '\0';
+				kv.GetSectionName(sound_name[1], sizeof(sound_name) - 1);
+				int layers = kv.GetNum(NULL_STRING, 1);
 
-                if (sound_name[1] != '\0' && layers > 0)
-                {
-                    if (layers > 9)
-                    {
-                        layers = 9;
-                    }
-                    sound_name[0] = layers;
+				if (sound_name[1] != '\0' && layers > 0)
+				{
+					if (layers > 9)
+					{
+						layers = 9;
+					}
+					sound_name[0] = layers;
 
-                    sounds.PushString(sound_name);
-                    AddFileToDownloadsTable(sound_name[1]);
-                    //PrintToServer("    == %s", sound_name[1]);
-                }
-            } while (kv.GotoNextKey(KV_VALUES_ONLY));
+					sounds.PushString(sound_name);
+					AddFileToDownloadsTable(sound_name[1]);
+					//PrintToServer("    == %s", sound_name[1]);
+				}
+			} while (kv.GotoNextKey(KV_VALUES_ONLY));
 
-            kv.GoBack();
-        }
+			kv.GoBack();
+		}
 
-        kv.GoBack();
-    }
+		kv.GoBack();
+	}
 }
 
 /**
@@ -751,76 +811,76 @@ void LoadSoundArray(KeyValues kv, const char[] key, ArrayList sounds)
  */
 bool LoadWeaponRegistry(KeyValues kv)
 {
-    bool read_registry = false;
+	bool read_registry = false;
 
-    if (kv.JumpToKey("weapon_registry"))
-    {
-        if (kv.GotoFirstSubKey(KV_KEYS_ONLY))
-        {
-            char item_name[CLASSNAME_MAX];
-            char category[CLASSNAME_MAX];
+	if (kv.JumpToKey("weapon_registry"))
+	{
+		if (kv.GotoFirstSubKey(KV_KEYS_ONLY))
+		{
+			char item_name[CLASSNAME_MAX];
+			char category[CLASSNAME_MAX];
 
-            do
-            {
-                // Extract item info.
-                kv.GetSectionName(item_name, sizeof(item_name));
+			do
+			{
+				// Extract item info.
+				kv.GetSectionName(item_name, sizeof(item_name));
 
-                int id = kv.GetNum("id", -1);
-                if (id < 0 || id >= WEAPON_ID_MAX)
-                {
-                    continue;
-                }
+				int id = kv.GetNum("id", -1);
+				if (id < 0 || id >= WEAPON_ID_MAX)
+				{
+					continue;
+				}
 
-                kv.GetString("category", category, sizeof(category), "");
-                int ammo_id = kv.GetNum("ammo-id", -1);
+				kv.GetString("category", category, sizeof(category), "");
+				int ammo_id = kv.GetNum("ammo-id", -1);
 
-                int cat = -1;
-                if (StrEqual(category, "none"))
-                {
-                    cat = INVENTORY_BOX_CATEGORY_NONE;
-                }
-                else if (StrEqual(category, "weapon"))
-                {
-                    cat = INVENTORY_BOX_CATEGORY_WEAPON;
-                }
-                else if (StrEqual(category, "gear"))
-                {
-                    cat = INVENTORY_BOX_CATEGORY_GEAR;
-                }
-                else if (StrEqual(category, "ammo"))
-                {
-                    cat = INVENTORY_BOX_CATEGORY_AMMO;
-                }
-                else
-                {
-                    LogError("Weapon, %s, in backpack config uses invalid category '%s'", item_name, category);
-                }
+				int cat = -1;
+				if (StrEqual(category, "none"))
+				{
+					cat = INVENTORY_BOX_CATEGORY_NONE;
+				}
+				else if (StrEqual(category, "weapon"))
+				{
+					cat = INVENTORY_BOX_CATEGORY_WEAPON;
+				}
+				else if (StrEqual(category, "gear"))
+				{
+					cat = INVENTORY_BOX_CATEGORY_GEAR;
+				}
+				else if (StrEqual(category, "ammo"))
+				{
+					cat = INVENTORY_BOX_CATEGORY_AMMO;
+				}
+				else
+				{
+					LogError("Weapon, %s, in backpack config uses invalid category '%s'", item_name, category);
+				}
 
-                // Map item's name to its weapon registry ID.
-                g_weapon_registry_name_lookup.SetValue(item_name, id);
+				// Map item's name to its weapon registry ID.
+				g_weapon_registry_name_lookup.SetValue(item_name, id);
 
-                g_weapon_registry.Set(id, cat, WEAPON_REGISTRY_CATEGORY);
-                g_weapon_registry.Set(id, ammo_id, WEAPON_REGISTRY_AMMO_ID);
-                g_weapon_registry_names.SetString(id, item_name);
+				g_weapon_registry.Set(id, cat, WEAPON_REGISTRY_CATEGORY);
+				g_weapon_registry.Set(id, ammo_id, WEAPON_REGISTRY_AMMO_ID);
+				g_weapon_registry_names.SetString(id, item_name);
 
-                // Map ammo IDs to their weapon registry counterpart.
-                if (ammo_id != -1 && ammo_id < AMMO_ID_MAX)
-                {
-                    g_ammo_registry_name_lookup.SetValue(item_name, ammo_id);
+				// Map ammo IDs to their weapon registry counterpart.
+				if (ammo_id != -1 && ammo_id < AMMO_ID_MAX)
+				{
+					g_ammo_registry_name_lookup.SetValue(item_name, ammo_id);
 
-                    g_ammo_registry.SetString(ammo_id, item_name);
-                }
+					g_ammo_registry.SetString(ammo_id, item_name);
+				}
 
-                read_registry = true;
-            } while (kv.GotoNextKey(KV_KEYS_ONLY));
+				read_registry = true;
+			} while (kv.GotoNextKey(KV_KEYS_ONLY));
 
-            kv.GoBack();
-        }
+			kv.GoBack();
+		}
 
-        kv.GoBack();
-    }
+		kv.GoBack();
+	}
 
-    return read_registry;
+	return read_registry;
 }
 
 /**
@@ -828,22 +888,22 @@ bool LoadWeaponRegistry(KeyValues kv)
  */
 bool GetWeaponByID(int weapon_id, int& category, char[] weapon_name, int buffer_size)
 {
-    bool found = false;
-    if (weapon_id >= 0 && weapon_id < WEAPON_ID_MAX)
-    {
-        int cat = g_weapon_registry.Get(weapon_id, WEAPON_REGISTRY_CATEGORY);
-        if (cat != -1)
-        {
-            category = cat;
+	bool found = false;
+	if (weapon_id >= 0 && weapon_id < WEAPON_ID_MAX)
+	{
+		int cat = g_weapon_registry.Get(weapon_id, WEAPON_REGISTRY_CATEGORY);
+		if (cat != -1)
+		{
+			category = cat;
 
-            if (buffer_size > 0)
-            {
-                g_weapon_registry_names.GetString(weapon_id, weapon_name, buffer_size);
-            }
-            found = true;
-        }
-    }
-    return found;
+			if (buffer_size > 0)
+			{
+				g_weapon_registry_names.GetString(weapon_id, weapon_name, buffer_size);
+			}
+			found = true;
+		}
+	}
+	return found;
 }
 
 /**
@@ -851,13 +911,13 @@ bool GetWeaponByID(int weapon_id, int& category, char[] weapon_name, int buffer_
  */
 bool GetWeaponByName(const char[] weapon_name, int &id, int &category)
 {
-    bool found = false;
-    if (g_weapon_registry_name_lookup.GetValue(weapon_name, id))
-    {
-        char none[1];
-        found = GetWeaponByID(id, category, none, 0);
-    }
-    return found;
+	bool found = false;
+	if (g_weapon_registry_name_lookup.GetValue(weapon_name, id))
+	{
+		char none[1];
+		found = GetWeaponByID(id, category, none, 0);
+	}
+	return found;
 }
 
 /**
@@ -865,14 +925,14 @@ bool GetWeaponByName(const char[] weapon_name, int &id, int &category)
  */
 bool GetAmmoByID(int ammo_id, int &weapon_id, int &category, char[] ammo_name, int buffer_size)
 {
-    bool found = false;
-    if (ammo_id >= 0 &&
-        ammo_id < AMMO_ID_MAX &&
-        g_ammo_registry.GetString(ammo_id, ammo_name, buffer_size) > 0)
-    {
-        found = GetWeaponByName(ammo_name, weapon_id, category);
-    }
-    return found;
+	bool found = false;
+	if (ammo_id >= 0 &&
+		ammo_id < AMMO_ID_MAX &&
+		g_ammo_registry.GetString(ammo_id, ammo_name, buffer_size) > 0)
+	{
+		found = GetWeaponByName(ammo_name, weapon_id, category);
+	}
+	return found;
 }
 
 /**
@@ -880,8 +940,8 @@ bool GetAmmoByID(int ammo_id, int &weapon_id, int &category, char[] ammo_name, i
  */
 bool GetAmmoByEnt(int ammobox, int &weapon_id, int &category, char[] ammo_name, int buffer_size)
 {
-    int ammo_id = GetEntData(ammobox, g_offset_ammobox_ammo_type, SIZEOF_SHORT);
-    return GetAmmoByID(ammo_id, weapon_id, category, ammo_name, buffer_size);
+	int ammo_id = GetEntData(ammobox, g_offset_ammobox_ammo_type, SIZEOF_SHORT);
+	return GetAmmoByID(ammo_id, weapon_id, category, ammo_name, buffer_size);
 }
 
 /**
@@ -889,236 +949,225 @@ bool GetAmmoByEnt(int ammobox, int &weapon_id, int &category, char[] ammo_name, 
  */
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
-    g_plugin_loaded_late = late;
+	g_plugin_loaded_late = late;
 }
 
 void AddModelToDownloadsTable(const char[] model_name)
 {
-    AddFileToDownloadsTable(model_name);
+	AddFileToDownloadsTable(model_name);
 
-    static const char MDL_EXT[] = ".mdl";
+	static const char MDL_EXT[] = ".mdl";
 
-    char buffer[PLATFORM_MAX_PATH];
-    int len = strcopy(buffer, sizeof(buffer), model_name) - (sizeof(MDL_EXT) - 1);
+	char buffer[PLATFORM_MAX_PATH];
+	int len = strcopy(buffer, sizeof(buffer), model_name) - (sizeof(MDL_EXT) - 1);
 
-    strcopy(buffer[len], sizeof(buffer) - len, ".dx80.vtx");
-    AddFileToDownloadsTable(buffer);
+	strcopy(buffer[len], sizeof(buffer) - len, ".dx80.vtx");
+	AddFileToDownloadsTable(buffer);
 
-    strcopy(buffer[len], sizeof(buffer) - len, ".dx90.vtx");
-    AddFileToDownloadsTable(buffer);
+	strcopy(buffer[len], sizeof(buffer) - len, ".dx90.vtx");
+	AddFileToDownloadsTable(buffer);
 
-    strcopy(buffer[len], sizeof(buffer) - len, ".sw.vtx");
-    AddFileToDownloadsTable(buffer);
+	strcopy(buffer[len], sizeof(buffer) - len, ".sw.vtx");
+	AddFileToDownloadsTable(buffer);
 
-    strcopy(buffer[len], sizeof(buffer) - len, ".vvd");
-    AddFileToDownloadsTable(buffer);
+	strcopy(buffer[len], sizeof(buffer) - len, ".vvd");
+	AddFileToDownloadsTable(buffer);
 }
 
 public void OnPluginStart()
 {
-    LoadTranslations("common.phrases");
-    LoadTranslations("backpack.phrases");
+	LoadTranslations("common.phrases");
+	LoadTranslations("backpack.phrases");
 
-    LoadPluginGamedata();
+	LoadPluginGamedata();
 
-    //
-    // Allocate plugin memory.
-    //
+	//
+	// Allocate plugin memory.
+	//
 
-    g_backpack_types = new ArrayList(BACKPACK_TYPE_TUPLE_SIZE, 0);
-    g_backpack_type_names = new ArrayList(CLASSNAME_MAX, 0);
-    g_backpack_type_itembox_models = new ArrayList(PLATFORM_MAX_PATH, 0);
-    g_backpack_type_ornament_models = new ArrayList(PLATFORM_MAX_PATH, 0);
-    g_backpack_type_name_lookup = new StringMap();
+	g_backpack_npcs = new StringMap();
 
-    g_backpacks = new ArrayList(BACKPACK_TUPLE_SIZE, 0);
-    g_backpack_clips = new ArrayList(ITEMBOX_MAX_SLOTS, 0);
-    g_backpack_gear_clips = new ArrayList(ITEMBOX_MAX_GEAR, 0);
-    g_backpack_ammos = new ArrayList(ITEMBOX_MAX_SLOTS, 0);
+	g_backpack_types = new ArrayList(BACKPACK_TYPE_TUPLE_SIZE, 0);
+	g_backpack_type_names = new ArrayList(CLASSNAME_MAX, 0);
+	g_backpack_type_itembox_models = new ArrayList(PLATFORM_MAX_PATH, 0);
+	g_backpack_type_ornament_models = new ArrayList(PLATFORM_MAX_PATH, 0);
+	g_backpack_type_name_lookup = new StringMap();
 
-    g_weapon_registry = new ArrayList(WEAPON_REGISTRY_TUPLE_SIZE, WEAPON_ID_MAX);
-    g_weapon_registry_names = new ArrayList(CLASSNAME_MAX, WEAPON_ID_MAX);
-    g_weapon_registry_name_lookup = new StringMap();
+	g_backpacks = new ArrayList(BACKPACK_TUPLE_SIZE, 0);
+	g_backpack_clips = new ArrayList(ITEMBOX_MAX_SLOTS, 0);
+	g_backpack_gear_clips = new ArrayList(ITEMBOX_MAX_GEAR, 0);
+	g_backpack_ammos = new ArrayList(ITEMBOX_MAX_SLOTS, 0);
 
-    g_ammo_registry = new ArrayList(AMMO_NAME_MAX, AMMO_ID_MAX);
-    g_ammo_registry_name_lookup = new StringMap();
+	g_weapon_registry = new ArrayList(WEAPON_REGISTRY_TUPLE_SIZE, WEAPON_ID_MAX);
+	g_weapon_registry_names = new ArrayList(CLASSNAME_MAX, WEAPON_ID_MAX);
+	g_weapon_registry_name_lookup = new StringMap();
 
-    //
-    // Initialize weapon and ammo registry.
-    //
+	g_ammo_registry = new ArrayList(AMMO_NAME_MAX, AMMO_ID_MAX);
+	g_ammo_registry_name_lookup = new StringMap();
 
-    int init[WEAPON_REGISTRY_TUPLE_SIZE] = { -1, ... };
+	//
+	// Initialize weapon and ammo registry.
+	//
 
-    char blank[] = "";
-    for (int i = 0; i < WEAPON_ID_MAX; ++i)
-    {
-        g_weapon_registry.SetArray(i, init);
-        g_weapon_registry_names.SetString(i, blank);
-    }
+	int init[WEAPON_REGISTRY_TUPLE_SIZE] = { -1, ... };
 
-    for (int i = 0; i < AMMO_ID_MAX; ++i)
-    {
-        g_ammo_registry.SetString(i, blank);
-    }
+	char blank[] = "";
+	for (int i = 0; i < WEAPON_ID_MAX; ++i)
+	{
+		g_weapon_registry.SetArray(i, init);
+		g_weapon_registry_names.SetString(i, blank);
+	}
 
-    LoadPluginConfig();
+	for (int i = 0; i < AMMO_ID_MAX; ++i)
+	{
+		g_ammo_registry.SetString(i, blank);
+	}
 
-    //
-    // Create/find ConVars.
-    //
+	LoadPluginConfig();
 
-    g_cvar_backpack_count = CreateConVar("sm_backpack_count", "1",
-        "Number of backpacks to create at round start. Won't create more backpacks than there are players.");
+	//
+	// Create/find ConVars.
+	//
+	AutoExecConfig_SetFile("plugin.backpack");
 
-    g_cvar_backpack_ammo_stack_limit = CreateConVar("sm_backpack_ammo_stack_limit", "4",
-        "Number of ammo pickups that can be stored per ammo slot. 0 means infinite.");
+	g_cvar_backpack_count = AutoExecConfig_CreateConVar("sm_backpack_count", "1",
+		"Number of backpacks to create at round start. Won't create more backpacks than there are players.");
 
-    g_cvar_backpack_only_admins_can_wear = CreateConVar("sm_backpack_only_admins_can_wear", "0",
-        "Only allow admins to wear backpacks.");
+	g_cvar_backpack_ammo_stack_limit = AutoExecConfig_CreateConVar("sm_backpack_ammo_stack_limit", "4",
+		"Number of ammo pickups that can be stored per ammo slot. 0 means infinite.");
 
-    g_cvar_backpack_only_admins_can_open = CreateConVar("sm_backpack_only_admins_can_open", "0",
-        "Only allow admins to open backpacks.");
+	g_cvar_backpack_only_admins_can_wear = AutoExecConfig_CreateConVar("sm_backpack_only_admins_can_wear", "0",
+		"Only allow admins to wear backpacks.");
 
-    g_cvar_backpack_colorize = CreateConVar("sm_backpack_colorize", "1",
-        "Randomly colorize backpacks to help distinguish them.");
+	g_cvar_backpack_only_admins_can_open = AutoExecConfig_CreateConVar("sm_backpack_only_admins_can_open", "0",
+		"Only allow admins to open backpacks.");
 
-    g_cvar_backpack_glow = CreateConVar("sm_backpack_glow", "1", 
-        "Glow dropped backpacks");
+	g_cvar_backpack_colorize = AutoExecConfig_CreateConVar("sm_backpack_colorize", "1",
+		"Randomly colorize backpacks to help distinguish them.");
 
-    g_cvar_backpack_glow_blip = CreateConVar("sm_backpack_glow_blip", "0", 
-        "Add glowing backpacks to compass");
+	g_cvar_backpack_glow_type = AutoExecConfig_CreateConVar("sm_backpack_glow", "1", 
+		"Highlight method for dropped backpacks. 0 = Don't glow, 1 = Outline, 2 = Pulse");
 
-    g_cvar_backpack_glow_dist = CreateConVar("sm_backpack_glow_distance", "300.0", 
-        "Range of backpack glow");
+	g_cvar_backpack_glow_blip = AutoExecConfig_CreateConVar("sm_backpack_glow_blip", "0", 
+		"If highlight mode is set to outline, whether to add a marker to the player's compass");
 
-    g_cvar_backpack_speed = CreateConVar("sm_backpack_speed", "0",
-        "Whether to use backpack speedfactor convars.");
+	g_cvar_backpack_glow_dist = AutoExecConfig_CreateConVar("sm_backpack_glow_distance", "300.0", 
+		"If highlight mode is set to outline, distance at which the glow stops being seen");
 
-    g_cvar_backpack_speedfactor_norm = CreateConVar("sm_backpack_speedfactor_norm", "1.0",
-        "Movement speed factor when backpack is less than half-full.");
+	g_cvar_backpack_speed = AutoExecConfig_CreateConVar("sm_backpack_speed", "0",
+		"Whether to use backpack speedfactor convars.");
 
-    g_cvar_backpack_speedfactor_half = CreateConVar("sm_backpack_speedfactor_half", "0.9",
-        "Movement speed factor when backpack is more than half-full but not completely full.");
+	g_cvar_backpack_speedfactor_norm = AutoExecConfig_CreateConVar("sm_backpack_speedfactor_norm", "1.0",
+		"Movement speed factor when backpack is less than half-full.");
 
-    g_cvar_backpack_speedfactor_full = CreateConVar("sm_backpack_speedfactor_full", "0.75",
-        "Movement speed factor when backpack is completely full.");
+	g_cvar_backpack_speedfactor_half = AutoExecConfig_CreateConVar("sm_backpack_speedfactor_half", "0.9",
+		"Movement speed factor when backpack is more than half-full but not completely full.");
 
-    g_cvar_backpack_keep_supply_drops = CreateConVar("sm_backpack_keep_supply_drops", "1",
-        "Prevent non-empty inventory boxes from fading out when another one is created.");
+	g_cvar_backpack_speedfactor_full = AutoExecConfig_CreateConVar("sm_backpack_speedfactor_full", "0.75",
+		"Movement speed factor when backpack is completely full.");
 
-    AutoExecConfig(true);
+	g_cvar_backpack_supply_drop_cooldown = AutoExecConfig_CreateConVar("sm_backpack_supply_drop_cooldown", "30",
+		"Number of seconds player must wait between supply drops from a flare gun.");
 
-    g_inv_maxcarry = FindConVar("inv_maxcarry");
+	g_cvar_backpack_keep_supply_drops = AutoExecConfig_CreateConVar("sm_backpack_keep_supply_drops", "1",
+		"Prevent non-empty inventory boxes from fading out when another one is created.");
 
-    //
-    // Hook game events.
-    //
+	g_cvar_backpack_npc_chance = AutoExecConfig_CreateConVar("sm_backpack_zombie_chance", "0.01",
+		"Chance for a zombie to spawn with a backpack. Set to zero or negative to disable");
 
-    HookEvent("player_spawn", Event_PlayerSpawn);
-    HookEvent("player_death", Event_PlayerDeath);
-    HookEvent("player_extracted", Event_PlayerExtracted);
-    HookEvent("game_restarting", Event_GameRestarting);
-    HookEvent("nmrih_practice_ending", Event_GameRestarting);
+	AutoExecConfig_ExecuteFile();
+	AutoExecConfig_CleanFile();
 
-    if (g_plugin_loaded_late)
-    {
-        g_plugin_loaded_late = false;
+	g_inv_maxcarry = FindConVar("inv_maxcarry");
 
-        int max_entities = GetMaxEntities();
-        for (int i = MaxClients + 1; i < max_entities; ++i)
-        {
-            if (IsValidEdict(i))
-            {
-                HandleNewEntity(i, false);
-            }
-        }
+	//
+	// Hook game events.
+	//
 
-        // Hook existing players.
-        for (int i = 1; i <= MaxClients; ++i)
-        {
-            if (IsClientAuthorized(i) && IsClientInGame(i))
-            {
-                OnClientPostAdminCheck(i);
-            }
-        }
-    }
+	HookEvent("player_spawn", Event_PlayerSpawn);
+	HookEvent("player_death", Event_PlayerDeath);
+	HookEvent("player_extracted", Event_PlayerExtracted);
+	HookEvent("game_restarting", Event_GameRestarting);
+	HookEvent("nmrih_practice_ending", Event_GameRestarting);
+	HookEvent("npc_killed", Event_NPCKilled);
 
-    SetupAdminCommands();
+	SetupAdminCommands();
 }
 
 void LoadPluginGamedata()
 {
-    static const char config_name[] = "backpack.games";
-    Handle gameconf = LoadGameConfigFile(config_name);
-    if (!gameconf)
-    {
-        SetFailState("Missing gamedata file: %s", config_name);
-    }
+	static const char config_name[] = "backpack.games";
+	Handle gameconf = LoadGameConfigFile(config_name);
+	if (!gameconf)
+	{
+		SetFailState("Missing gamedata file: %s", config_name);
+	}
 
-    g_offset_ammobox_ammo_type = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::m_nAmmoType");
-    g_offset_itembox_item_count = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_nItemCount");
-    g_offset_itembox_ammo_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_AmmoArray");
-    g_offset_itembox_gear_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_GearArray");
-    g_offset_itembox_weapon_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_WeaponArray");
+	g_offset_zombie_iscrawler = GameConfGetOffsetOrFail(gameconf, "CNMRiH_BaseZombie::m_bCrawler");
+	g_offset_ammobox_ammo_type = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::m_nAmmoType");
+	g_offset_itembox_item_count = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_nItemCount");
+	g_offset_itembox_ammo_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_AmmoArray");
+	g_offset_itembox_gear_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_GearArray");
+	g_offset_itembox_weapon_array = GameConfGetOffsetOrFail(gameconf, "CItem_InventoryBox::m_WeaponArray");
 
-    //
-    // Create detours.
-    //
+	//
+	// Create detours.
+	//
 
-    g_detour_baseentity_start_fade_out = DHookCreateFromConfOrFail(gameconf, "CBaseEntity::SUB_StartFadeOut");
-    if (!DHookEnableDetour(g_detour_baseentity_start_fade_out, DHOOK_PRE, Detour_BaseEntity_StartFadeOut))
-    {
-        LogError("Failed to detour SUB_StartFadeOut");
-    }
+	g_detour_baseentity_start_fade_out = DHookCreateFromConfOrFail(gameconf, "CBaseEntity::SUB_StartFadeOut");
+	if (!DHookEnableDetour(g_detour_baseentity_start_fade_out, DHOOK_PRE, Detour_BaseEntity_StartFadeOut))
+	{
+		LogError("Failed to detour SUB_StartFadeOut");
+	}
 
-    g_detour_itembox_player_take_items = DHookCreateFromConfOrFail(gameconf, "CItem_InventoryBox::PlayerTakeItems");
-    if (!DHookEnableDetour(g_detour_itembox_player_take_items, DHOOK_PRE, Detour_ItemBox_PlayerTakeItems))
-    {
-        LogError("Failed to detour PlayerTakeItems");
-    }
+	g_detour_itembox_player_take_items = DHookCreateFromConfOrFail(gameconf, "CItem_InventoryBox::PlayerTakeItems");
+	if (!DHookEnableDetour(g_detour_itembox_player_take_items, DHOOK_PRE, Detour_ItemBox_PlayerTakeItems))
+	{
+		LogError("Failed to detour PlayerTakeItems");
+	}
 
-    g_detour_ammobox_fall_init = DHookCreateFromConfOrFail(gameconf, "CItem_AmmoBox::FallInit");
-    if (!DHookEnableDetour(g_detour_ammobox_fall_init, DHOOK_PRE, Detour_BaseItem_FallInit))
-    {
-        LogError("Failed to detour AmmoBox::FallInit");
-    }
-    if (!DHookEnableDetour(g_detour_ammobox_fall_init, DHOOK_POST, Detour_BaseItem_FallInitPost))
-    {
-        LogError("Failed to detour AmmoBox::FallInit post");
-    }
+	g_detour_ammobox_fall_init = DHookCreateFromConfOrFail(gameconf, "CItem_AmmoBox::FallInit");
+	if (!DHookEnableDetour(g_detour_ammobox_fall_init, DHOOK_PRE, Detour_BaseItem_FallInit))
+	{
+		LogError("Failed to detour AmmoBox::FallInit");
+	}
+	if (!DHookEnableDetour(g_detour_ammobox_fall_init, DHOOK_POST, Detour_BaseItem_FallInitPost))
+	{
+		LogError("Failed to detour AmmoBox::FallInit post");
+	}
 
-    g_detour_ammobox_fall_think = DHookCreateFromConfOrFail(gameconf, "CItem_AmmoBox::FallThink");
-    if (!DHookEnableDetour(g_detour_ammobox_fall_think, DHOOK_PRE, Detour_BaseItem_FallThink))
-    {
-        LogError("Failed to detour AmmoBox::FallThink");
-    }
-    if (!DHookEnableDetour(g_detour_ammobox_fall_think, DHOOK_POST, Detour_BaseItem_FallThinkPost))
-    {
-        LogError("Failed to detour AmmoBox::FallThink post");
-    }
+	g_detour_ammobox_fall_think = DHookCreateFromConfOrFail(gameconf, "CItem_AmmoBox::FallThink");
+	if (!DHookEnableDetour(g_detour_ammobox_fall_think, DHOOK_PRE, Detour_BaseItem_FallThink))
+	{
+		LogError("Failed to detour AmmoBox::FallThink");
+	}
+	if (!DHookEnableDetour(g_detour_ammobox_fall_think, DHOOK_POST, Detour_BaseItem_FallThinkPost))
+	{
+		LogError("Failed to detour AmmoBox::FallThink post");
+	}
 
-    g_detour_player_get_speed_factor = DHookCreateFromConfOrFail(gameconf, "CNMRiH_Player::GetWeightSpeedFactor");
-    if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_PRE, Detour_Player_GetWeightSpeedFactor))
-    {
-        LogError("Failed to detour CNMRiH_Player::GetWeightSpeedFactor");
-    }
-    if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_POST, Detour_Player_GetWeightSpeedFactorPost))
-    {
-        LogError("Failed to detour CNMRiH_Player::GetWeightSpeedFactor post");
-    }
+	g_detour_flare_projectile_explode = DHookCreateFromConfOrFail(gameconf, "CNMRiHFlareProjectile::Explode");
+	if (!DHookEnableDetour(g_detour_flare_projectile_explode, DHOOK_PRE, Detour_FlareProjectile_Explode))
+	{
+		LogError("Failed to detour CNMRiHFlareProjectile::Explode");
+	}
 
-    g_detour_flare_projectile_explode = DHookCreateFromConfOrFail(gameconf, "CNMRiHFlareProjectile::Explode");
-    if (!DHookEnableDetour(g_detour_flare_projectile_explode, DHOOK_PRE, Detour_FlareProjectile_Explode))
-    {
-        LogError("Failed to detour CNMRiHFlareProjectile::Explode");
-    }
+	g_detour_player_get_speed_factor = DHookCreateFromConfOrFail(gameconf, "CNMRiH_Player::GetWeightSpeedFactor");
+	if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_PRE, Detour_Player_GetWeightSpeedFactor))
+	{
+		LogError("Failed to detour CNMRiH_Player::GetWeightSpeedFactor");
+	}
+	if (!DHookEnableDetour(g_detour_player_get_speed_factor, DHOOK_POST, Detour_Player_GetWeightSpeedFactorPost))
+	{
+		LogError("Failed to detour CNMRiH_Player::GetWeightSpeedFactor post");
+	}
 
-    g_dhook_weaponbase_fall_init = DHookCreateFromConfOrFail(gameconf, "CBaseCombatWeapon::FallInit");
-    g_dhook_weaponbase_fall_think = DHookCreateFromConfOrFail(gameconf, "CBaseCombatWeapon::FallThink");
+	g_dhook_weaponbase_fall_init = DHookCreateFromConfOrFail(gameconf, "CBaseCombatWeapon::FallInit");
+	g_dhook_weaponbase_fall_think = DHookCreateFromConfOrFail(gameconf, "CBaseCombatWeapon::FallThink");
 
-    LoadPluginGamedataSDKCalls(gameconf);
+	LoadPluginGamedataSDKCalls(gameconf);
 
-    CloseHandle(gameconf);
+	CloseHandle(gameconf);
 }
 
 /**
@@ -1126,68 +1175,55 @@ void LoadPluginGamedata()
  */
 void LoadPluginGamedataSDKCalls(Handle gameconf)
 {
-    int offset;
+	int offset;
 
-    offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::SetAmmoType");
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetVirtual(offset);
-    PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);
-    g_sdkcall_ammobox_set_ammo_type = EndPrepSDKCall();
+	offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::SetAmmoType");
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetVirtual(offset);
+	PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);
+	g_sdkcall_ammobox_set_ammo_type = EndPrepSDKCall();
 
-    offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::SetAmmoCount");
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetVirtual(offset);
-    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
-    g_sdkcall_ammobox_set_ammo_count = EndPrepSDKCall();
+	offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::SetAmmoCount");
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetVirtual(offset);
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+	g_sdkcall_ammobox_set_ammo_count = EndPrepSDKCall();
 
-    offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::GetMaxAmmo");
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetVirtual(offset);
-    PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
-    g_sdkcall_ammobox_get_max_ammo = EndPrepSDKCall();
+	offset = GameConfGetOffsetOrFail(gameconf, "CItem_AmmoBox::GetMaxAmmo");
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetVirtual(offset);
+	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
+	g_sdkcall_ammobox_get_max_ammo = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Entity);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::AddItem");
-    PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);  // weapon name
-    g_sdkcall_itembox_add_item = EndPrepSDKCall();
+	StartPrepSDKCall(SDKCall_Entity);
+	GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::AddItem");
+	PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);  // weapon name
+	g_sdkcall_itembox_add_item = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Entity);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CBaseEntity::SetCollisionGroup");
-    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);  // int, collision group
-    g_sdkcall_baseentity_set_collision_group = EndPrepSDKCall();
+	StartPrepSDKCall(SDKCall_Entity);
+	GameConfPrepSDKCallSignatureOrFail(gameconf, "CBaseEntity::SetCollisionGroup");
+	PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);  // int, collision group
+	g_sdkcall_baseentity_set_collision_group = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Entity);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::EndUseForPlayer");
-    PrepSDKCall_AddParameter(SDKType_CBasePlayer, SDKPass_Pointer);
-    g_sdkcall_itembox_end_use_for_player = EndPrepSDKCall();
+	StartPrepSDKCall(SDKCall_Entity);
+	GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::EndUseForPlayer");
+	PrepSDKCall_AddParameter(SDKType_CBasePlayer, SDKPass_Pointer);
+	g_sdkcall_itembox_end_use_for_player = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Entity);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::EndUseForAllPlayers");
-    g_sdkcall_itembox_end_use_for_all_players = EndPrepSDKCall();
+	StartPrepSDKCall(SDKCall_Entity);
+	GameConfPrepSDKCallSignatureOrFail(gameconf, "CItem_InventoryBox::EndUseForAllPlayers");
+	g_sdkcall_itembox_end_use_for_all_players = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Entity);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CBaseCombatCharacter::Weapon_OwnsThisType");
-    PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);          // char *, pszWeapon
-    PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);      // int, iSubType
-    PrepSDKCall_SetReturnInfo(SDKType_CBaseEntity, SDKPass_Pointer);    // CBaseCombatWeapon*
-    g_sdkcall_player_owns_weapon_type = EndPrepSDKCall();
+	StartPrepSDKCall(SDKCall_Player);
+	GameConfPrepSDKCallSignatureOrFail(gameconf, "CNMRiH_Player::GetAmmoCarryWeight");
+	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
+	g_sdkcall_player_get_ammo_weight = EndPrepSDKCall();
 
-    StartPrepSDKCall(SDKCall_Player);
-    GameConfPrepSDKCallSignatureOrFail(gameconf, "CNMRiH_Player::GetAmmoCarryWeight");
-    PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
-    g_sdkcall_player_get_ammo_weight = EndPrepSDKCall();
-
-    offset = GameConfGetOffsetOrFail(gameconf, "CBaseEntity::IsBaseCombatWeapon");
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetVirtual(offset);
-    PrepSDKCall_SetReturnInfo(SDKType_Bool, SDKPass_Plain);
-    g_sdkcall_entity_is_combat_weapon = EndPrepSDKCall();
-
-    offset = GameConfGetOffsetOrFail(gameconf, "CBaseCombatWeapon::GetWeight");
-    StartPrepSDKCall(SDKCall_Entity);
-    PrepSDKCall_SetVirtual(offset);
-    PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
-    g_sdkcall_weapon_get_weight = EndPrepSDKCall();
+	offset = GameConfGetOffsetOrFail(gameconf, "CBaseCombatWeapon::GetWeight");
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetVirtual(offset);
+	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
+	g_sdkcall_weapon_get_weight = EndPrepSDKCall();
 }
 
 /**
@@ -1195,18 +1231,18 @@ void LoadPluginGamedataSDKCalls(Handle gameconf)
  */
 void SetupAdminCommands()
 {
-    RegAdminCmd("sm_backpack", Command_Backpack, ADMFLAG_BACKPACK, "sm_backpack");
-    RegAdminCmd("sm_createbackpack", Command_CreateBackpack, ADMFLAG_BACKPACK, "sm_createbackpack [#userid|name] [backpack_type]");
-    RegAdminCmd("sm_removebackpack", Command_RemoveBackpack, ADMFLAG_BACKPACK, "sm_removebackpack [#userid|name]");
-    RegAdminCmd("sm_bringbackpack", Command_BringBackpack, ADMFLAG_BACKPACK, "sm_bringbackpack [#userid|name]");
+	RegAdminCmd("sm_backpack", Command_Backpack, ADMFLAG_BACKPACK, "sm_backpack");
+	RegAdminCmd("sm_createbackpack", Command_CreateBackpack, ADMFLAG_BACKPACK, "sm_createbackpack [#userid|name] [backpack_type]");
+	RegAdminCmd("sm_removebackpack", Command_RemoveBackpack, ADMFLAG_BACKPACK, "sm_removebackpack [#userid|name]");
+	RegAdminCmd("sm_bringbackpack", Command_BringBackpack, ADMFLAG_BACKPACK, "sm_bringbackpack [#userid|name]");
 
-    // Handle late loading.
-    TopMenu top_menu;
-    if (LibraryExists("adminmenu") &&
-        ((top_menu = GetAdminTopMenu()) != null))
-    {
-        OnAdminMenuReady(top_menu);
-    }
+	// Handle late loading.
+	TopMenu top_menu;
+	if (LibraryExists("adminmenu") &&
+		((top_menu = GetAdminTopMenu()) != null))
+	{
+		OnAdminMenuReady(top_menu);
+	}
 }
 
 /**
@@ -1214,23 +1250,23 @@ void SetupAdminCommands()
  */
 public void OnAdminMenuReady(Handle menu_handle)
 {
-    TopMenu top_menu = TopMenu.FromHandle(menu_handle);
-    if (top_menu != g_admin_menu)
-    {
-        g_admin_menu = top_menu;
+	TopMenu top_menu = TopMenu.FromHandle(menu_handle);
+	if (top_menu != g_admin_menu)
+	{
+		g_admin_menu = top_menu;
 
-        // Create a category for backpack commands.
-        g_backpack_commands = g_admin_menu.AddCategory(ADMINMENU_BACKPACKCOMMANDS,
-            AdminMenu_Backpack, ADMINMENU_BACKPACKCOMMANDS, ADMFLAG_BACKPACK,
-            ADMINMENU_BACKPACKCOMMANDS);
+		// Create a category for backpack commands.
+		g_backpack_commands = g_admin_menu.AddCategory(ADMINMENU_BACKPACKCOMMANDS,
+			AdminMenu_Backpack, ADMINMENU_BACKPACKCOMMANDS, ADMFLAG_BACKPACK,
+			ADMINMENU_BACKPACKCOMMANDS);
 
-        if (g_backpack_commands != INVALID_TOPMENUOBJECT)
-        {
-            g_admin_menu.AddItem("sm_createbackpack", AdminMenu_CreateBackpack, g_backpack_commands, "sm_createbackpack", ADMFLAG_BACKPACK);
-            g_admin_menu.AddItem("sm_removebackpack", AdminMenu_RemoveBackpack, g_backpack_commands, "sm_removebackpack", ADMFLAG_BACKPACK);
-            g_admin_menu.AddItem("sm_bringbackpack", AdminMenu_BringBackpack, g_backpack_commands, "sm_bringbackpack", ADMFLAG_BACKPACK);
-        }
-    }
+		if (g_backpack_commands != INVALID_TOPMENUOBJECT)
+		{
+			g_admin_menu.AddItem("sm_createbackpack", AdminMenu_CreateBackpack, g_backpack_commands, "sm_createbackpack", ADMFLAG_BACKPACK);
+			g_admin_menu.AddItem("sm_removebackpack", AdminMenu_RemoveBackpack, g_backpack_commands, "sm_removebackpack", ADMFLAG_BACKPACK);
+			g_admin_menu.AddItem("sm_bringbackpack", AdminMenu_BringBackpack, g_backpack_commands, "sm_bringbackpack", ADMFLAG_BACKPACK);
+		}
+	}
 }
 
 /**
@@ -1238,10 +1274,10 @@ public void OnAdminMenuReady(Handle menu_handle)
  */
 public Action Command_Backpack(int client, int args)
 {
-    if (g_admin_menu && g_backpack_commands != INVALID_TOPMENUOBJECT)
-    {
-        g_admin_menu.DisplayCategory(g_backpack_commands, client);
-    }
+	if (g_admin_menu && g_backpack_commands != INVALID_TOPMENUOBJECT)
+	{
+		g_admin_menu.DisplayCategory(g_backpack_commands, client);
+	}
 }
 
 /**
@@ -1249,32 +1285,32 @@ public Action Command_Backpack(int client, int args)
  */
 void DisplayCreateBackpackMenu(int client)
 {
-    Menu menu = new Menu(Menu_CreateBackpack);
-    if (menu)
-    {
-        menu.SetTitle("%T", "@backpack-menu-create", client);
+	Menu menu = new Menu(Menu_CreateBackpack);
+	if (menu)
+	{
+		menu.SetTitle("%T", "@backpack-menu-create", client);
 
-        char backpack_type_name[CLASSNAME_MAX];
+		char backpack_type_name[CLASSNAME_MAX];
 
-        // Find all backpacks that aren't worn by players.
-        int backpack_types = g_backpack_types.Length;
-        for (int i = 0; i < backpack_types; ++i)
-        {
-            g_backpack_type_names.GetString(i, backpack_type_name, sizeof(backpack_type_name));
-            menu.AddItem(backpack_type_name, backpack_type_name);
-        }
+		// Find all backpacks that aren't worn by players.
+		int backpack_types = g_backpack_types.Length;
+		for (int i = 0; i < backpack_types; ++i)
+		{
+			g_backpack_type_names.GetString(i, backpack_type_name, sizeof(backpack_type_name));
+			menu.AddItem(backpack_type_name, backpack_type_name);
+		}
 
-        if (menu.ItemCount > 0)
-        {
-            menu.Display(client, MENU_TIME_FOREVER);
-        }
-        else
-        {
-            // No backpack types exist. We should never reach this.
-            LogError("No backpack types defined!");
-            delete menu;
-        }
-    }
+		if (menu.ItemCount > 0)
+		{
+			menu.Display(client, MENU_TIME_FOREVER);
+		}
+		else
+		{
+			// No backpack types exist. We should never reach this.
+			LogError("No backpack types defined!");
+			delete menu;
+		}
+	}
 }
 
 /**
@@ -1285,38 +1321,38 @@ void DisplayCreateBackpackMenu(int client)
  */
 public int Menu_CreateBackpack(Menu menu, MenuAction action, int param1, int param2)
 {
-    int result = 0;
+	int result = 0;
 
-    switch (action)
-    {
-    case MenuAction_Select:
-        {
-            int client = param1;
-            char info[CLASSNAME_MAX];
-            if (menu.GetItem(param2, info, sizeof(info)))
-            {
-                int backpack_type = g_backpack_type_names.FindString(info);
-                if (backpack_type != -1)
-                {
-                    TraceAndCreateBackpack(client, backpack_type);
-                }
-                else
-                {
-                    ReplyToCommand(client, "[Backpack] %T", "@backpack-unknown-backpack-type", client, info);
-                }
-            }
+	switch (action)
+	{
+	case MenuAction_Select:
+		{
+			int client = param1;
+			char info[CLASSNAME_MAX];
+			if (menu.GetItem(param2, info, sizeof(info)))
+			{
+				int backpack_type = g_backpack_type_names.FindString(info);
+				if (backpack_type != -1)
+				{
+					TraceAndCreateBackpack(client, backpack_type);
+				}
+				else
+				{
+					ReplyToCommand(client, "[Backpack] %T", "@backpack-unknown-backpack-type", client, info);
+				}
+			}
 
-            if (IsClientInGame(client) && !IsClientInKickQueue(client))
-            {
-                DisplayCreateBackpackMenu(client);
-            }
-        }
+			if (IsClientInGame(client) && !IsClientInKickQueue(client))
+			{
+				DisplayCreateBackpackMenu(client);
+			}
+		}
 
-    case MenuAction_End:
-        delete menu;
-    }
+	case MenuAction_End:
+		delete menu;
+	}
 
-    return result;
+	return result;
 }
 
 /**
@@ -1324,97 +1360,97 @@ public int Menu_CreateBackpack(Menu menu, MenuAction action, int param1, int par
  */
 public Action Command_CreateBackpack(int client, int args)
 {
-    if (args < 1)
-    {
-        if (client == 0)
-        {
-            ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
-        }
-        else if (g_backpack_types.Length == 1)
-        {
-            if (TraceAndCreateBackpack(client, 0) != -1)
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-create-notifier", client);
-            }
-            else
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-create-failed-notifier", client);
-            }
-        }
-        else
-        {
-            DisplayCreateBackpackMenu(client);
-        }
-    }
-    else
-    {
-        char pattern[128];
-        GetCmdArg(1, pattern, sizeof(pattern));
+	if (args < 1)
+	{
+		if (client == 0)
+		{
+			ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
+		}
+		else if (g_backpack_types.Length == 1)
+		{
+			if (TraceAndCreateBackpack(client, 0) != -1)
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-create-notifier", client);
+			}
+			else
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-create-failed-notifier", client);
+			}
+		}
+		else
+		{
+			DisplayCreateBackpackMenu(client);
+		}
+	}
+	else
+	{
+		char pattern[128];
+		GetCmdArg(1, pattern, sizeof(pattern));
 
-        char target_name[MAX_TARGET_LENGTH];
-        bool target_name_is_phrase = false;
+		char target_name[MAX_TARGET_LENGTH];
+		bool target_name_is_phrase = false;
 
-        int targets[MAXPLAYERS];
-        int target_count = ProcessTargetString(
-            pattern,
-            client,
-            targets,
-            sizeof(targets),
-            // Command only targets living players.
-            COMMAND_FILTER_ALIVE,
-            target_name,
-            sizeof(target_name),
-            target_name_is_phrase
-        );
+		int targets[MAXPLAYERS];
+		int target_count = ProcessTargetString(
+			pattern,
+			client,
+			targets,
+			sizeof(targets),
+			// Command only targets living players.
+			COMMAND_FILTER_ALIVE,
+			target_name,
+			sizeof(target_name),
+			target_name_is_phrase
+		);
 
-        if (target_count <= 0)
-        {
-            ReplyToTargetError(client, target_count);
-        }
-        else
-        {
-            bool randomize_backpack_type = true;
-            int backpack_type = -1;
-            if (args >= 2)
-            {
-                randomize_backpack_type = false;
+		if (target_count <= 0)
+		{
+			ReplyToTargetError(client, target_count);
+		}
+		else
+		{
+			bool randomize_backpack_type = true;
+			int backpack_type = -1;
+			if (args >= 2)
+			{
+				randomize_backpack_type = false;
 
-                // Parse second argument as backpack type.
-                char backpack_type_name[CLASSNAME_MAX];
-                GetCmdArg(2, backpack_type_name, sizeof(backpack_type_name));
-                backpack_type = g_backpack_type_names.FindString(backpack_type_name);
+				// Parse second argument as backpack type.
+				char backpack_type_name[CLASSNAME_MAX];
+				GetCmdArg(2, backpack_type_name, sizeof(backpack_type_name));
+				backpack_type = g_backpack_type_names.FindString(backpack_type_name);
 
-                if (backpack_type == -1)
-                {
-                    ReplyToCommand(client, "[Backpack] %T", "@backpack-unknown-backpack-type", client, backpack_type_name);
-                }
-            }
+				if (backpack_type == -1)
+				{
+					ReplyToCommand(client, "[Backpack] %T", "@backpack-unknown-backpack-type", client, backpack_type_name);
+				}
+			}
 
-            if (randomize_backpack_type || (backpack_type >= 0 && backpack_type < g_backpack_types.Length))
-            {
-                for (int i = 0; i < target_count; ++i)
-                {
-                    if (randomize_backpack_type)
-                    {
-                        backpack_type = RandomBackpackType(targets[i]);
-                    }
+			if (randomize_backpack_type || (backpack_type >= 0 && backpack_type < g_backpack_types.Length))
+			{
+				for (int i = 0; i < target_count; ++i)
+				{
+					if (randomize_backpack_type)
+					{
+						backpack_type = RandomBackpackType(targets[i]);
+					}
 
-                    TraceAndCreateBackpack(targets[i], backpack_type);
-                }
+					TraceAndCreateBackpack(targets[i], backpack_type);
+				}
 
-                if (target_name_is_phrase)
-                {
-                    ReplyToCommand(client, "[Backpack] %T", "@backpack-create-cmd-reply-t", client, target_name);
-                }
-                else
-                {
-                    ReplyToCommand(client, "[Backpack] %T", "@backpack-create-cmd-reply-s", client, target_name);
-                }
-            }
-        }
-    }
+				if (target_name_is_phrase)
+				{
+					ReplyToCommand(client, "[Backpack] %T", "@backpack-create-cmd-reply-t", client, target_name);
+				}
+				else
+				{
+					ReplyToCommand(client, "[Backpack] %T", "@backpack-create-cmd-reply-s", client, target_name);
+				}
+			}
+		}
+	}
 
-    return Plugin_Handled;
+	return Plugin_Handled;
 }
 
 /**
@@ -1423,27 +1459,27 @@ public Action Command_CreateBackpack(int client, int args)
  */
 public bool Trace_PlayerAndBackpack(int entity, int contents_mask, int to_ignore)
 {
-    int index = -1;
+	int index = -1;
 
-    if (entity > MaxClients)
-    {
-        // Check if entity is a backpack.
-        int entity_ref = EntIndexToEntRef(entity);
-        index = g_backpacks.FindValue(entity_ref, BACKPACK_ITEM_BOX);
-    }
-    else if (entity > 0 && entity != to_ignore)
-    {
-        // Check if entity is a player wearing a backpack.
-        int backpack_ref = g_player_backpacks[entity];
-        if (EntRefToEntIndex(backpack_ref) != INVALID_ENT_REFERENCE)
-        {
-            index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-        }
-    }
+	if (entity > MaxClients)
+	{
+		// Check if entity is a backpack.
+		int entity_ref = EntIndexToEntRef(entity);
+		index = g_backpacks.FindValue(entity_ref, BACKPACK_ITEM_BOX);
+	}
+	else if (entity > 0 && entity != to_ignore)
+	{
+		// Check if entity is a player wearing a backpack.
+		int backpack_ref = g_character_backpacks[entity];
+		if (EntRefToEntIndex(backpack_ref) != INVALID_ENT_REFERENCE)
+		{
+			index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+		}
+	}
 
-    g_player_and_backpack_trace_index = index;
+	g_player_and_backpack_trace_index = index;
 
-    return true;
+	return true;
 }
 
 /**
@@ -1452,23 +1488,23 @@ public bool Trace_PlayerAndBackpack(int entity, int contents_mask, int to_ignore
  */
 void TraceAndRemoveBackpack(int client)
 {
-    int hit = TracePlayerView(client, Trace_PlayerAndBackpack);
-    int backpack_index = g_player_and_backpack_trace_index;
+	int hit = TracePlayerView(client, Trace_PlayerAndBackpack);
+	int backpack_index = g_player_and_backpack_trace_index;
 
-    if (backpack_index != -1)
-    {
-        if (hit > 0 && hit <= MaxClients)
-        {
-            ResetPlayer(hit);
-        }
+	if (backpack_index != -1)
+	{
+		if (hit > 0 && hit <= MaxClients)
+		{
+			ResetCarrier(hit);
+		}
 
-        RemoveBackpackByIndex(backpack_index);
-        ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-notifier", client);
-    }
-    else
-    {
-        ReplyToCommand(client, "[Backpack] %T", "@backpack-no-backpacks-found", client);
-    }
+		RemoveBackpackByIndex(backpack_index);
+		ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-notifier", client);
+	}
+	else
+	{
+		ReplyToCommand(client, "[Backpack] %T", "@backpack-no-backpacks-found", client);
+	}
 }
 
 /**
@@ -1476,13 +1512,13 @@ void TraceAndRemoveBackpack(int client)
  */
 void RemoveBackpackByIndex(int index)
 {
-    int backpack_ref = g_backpacks.Get(index, BACKPACK_ITEM_BOX);
-    RemoveEntity(backpack_ref);
+	int backpack_ref = g_backpacks.Get(index, BACKPACK_ITEM_BOX);
+	RemoveEntity(backpack_ref);
 
-    int ornament_ref = g_backpacks.Get(index, BACKPACK_ORNAMENT);
-    RemoveEntity(ornament_ref);
+	int ornament_ref = g_backpacks.Get(index, BACKPACK_ORNAMENT);
+	RemoveEntity(ornament_ref);
 
-    RemoveArrayListElement(g_backpacks, index);
+	RemoveArrayListElement(g_backpacks, index);
 }
 
 /**
@@ -1491,74 +1527,74 @@ void RemoveBackpackByIndex(int index)
  */
 public Action Command_RemoveBackpack(int client, int args)
 {
-    if (args < 1)
-    {
-        if (client == 0)
-        {
-            ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
-        }
-        else
-        {
-            // Remove the first backpack the player is looking at.
-            TraceAndRemoveBackpack(client);
-        }
-    }
-    else
-    {
-        char pattern[128];
-        GetCmdArg(1, pattern, sizeof(pattern));
+	if (args < 1)
+	{
+		if (client == 0)
+		{
+			ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
+		}
+		else
+		{
+			// Remove the first backpack the player is looking at.
+			TraceAndRemoveBackpack(client);
+		}
+	}
+	else
+	{
+		char pattern[128];
+		GetCmdArg(1, pattern, sizeof(pattern));
 
-        char target_name[MAX_TARGET_LENGTH];
-        bool target_name_is_phrase = false;
+		char target_name[MAX_TARGET_LENGTH];
+		bool target_name_is_phrase = false;
 
-        int targets[MAXPLAYERS];
-        int target_count = ProcessTargetString(
-            pattern,
-            client,
-            targets,
-            sizeof(targets),
-            // Command only targets living players.
-            COMMAND_FILTER_ALIVE,
-            target_name,
-            sizeof(target_name),
-            target_name_is_phrase
-        );
+		int targets[MAXPLAYERS];
+		int target_count = ProcessTargetString(
+			pattern,
+			client,
+			targets,
+			sizeof(targets),
+			// Command only targets living players.
+			COMMAND_FILTER_ALIVE,
+			target_name,
+			sizeof(target_name),
+			target_name_is_phrase
+		);
 
-        if (target_count <= 0)
-        {
-            ReplyToTargetError(client, target_count);
-        }
-        else
-        {
-            // Remove backpacks worn by players targeted by command.
-            for (int i = 0; i < target_count; ++i)
-            {
-                int target = targets[i];
-                int backpack = EntRefToEntIndex(g_player_backpacks[target]);
-                if (backpack != INVALID_ENT_REFERENCE)
-                {
-                    int backpack_index = g_backpacks.FindValue(g_player_backpacks[target], BACKPACK_ITEM_BOX);
-                    if (backpack_index != -1)
-                    {
-                        ResetPlayer(target);
-                        RemoveBackpackByIndex(backpack_index);
-                        PrintToChat(target, "%T", "@backpack-destroyed-notifier", target);
-                    }
-                }
-            }
+		if (target_count <= 0)
+		{
+			ReplyToTargetError(client, target_count);
+		}
+		else
+		{
+			// Remove backpacks worn by players targeted by command.
+			for (int i = 0; i < target_count; ++i)
+			{
+				int target = targets[i];
+				int backpack = EntRefToEntIndex(g_character_backpacks[target]);
+				if (backpack != INVALID_ENT_REFERENCE)
+				{
+					int backpack_index = g_backpacks.FindValue(g_character_backpacks[target], BACKPACK_ITEM_BOX);
+					if (backpack_index != -1)
+					{
+						ResetCarrier(target);
+						RemoveBackpackByIndex(backpack_index);
+						PrintToChat(target, "%T", "@backpack-destroyed-notifier", target);
+					}
+				}
+			}
 
-            if (target_name_is_phrase)
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-cmd-reply-t", client, target_name);
-            }
-            else
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-cmd-reply-s", client, target_name);
-            }
-        }
-    }
+			if (target_name_is_phrase)
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-cmd-reply-t", client, target_name);
+			}
+			else
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-remove-cmd-reply-s", client, target_name);
+			}
+		}
+	}
 
-    return Plugin_Handled;
+	return Plugin_Handled;
 }
 
 /**
@@ -1566,96 +1602,96 @@ public Action Command_RemoveBackpack(int client, int args)
  */
 void DisplayBringBackpackMenu(int client)
 {
-    Menu menu = new Menu(Menu_BringBackpack);
-    if (menu)
-    {
-        menu.SetTitle("%T", "@backpack-menu-bring", client);
+	Menu menu = new Menu(Menu_BringBackpack);
+	if (menu)
+	{
+		menu.SetTitle("%T", "@backpack-menu-bring", client);
 
-        static const int PLAYER = 1;
-        static const int BACKPACK = 0;
-        int worn_backpacks[MAXPLAYERS][2];
-        int worn_backpack_count = 0;
+		static const int PLAYER = 1;
+		static const int BACKPACK = 0;
+		int worn_backpacks[MAXPLAYERS][2];
+		int worn_backpack_count = 0;
 
-        // Cache ent indices of backpacks worn by players.
-        for (int i = 1; i <= MaxClients; ++i)
-        {
-            int backpack = EntRefToEntIndex(g_player_backpacks[i]);
-            if (backpack != INVALID_ENT_REFERENCE)
-            {
-                worn_backpacks[worn_backpack_count][PLAYER] = i;
-                worn_backpacks[worn_backpack_count][BACKPACK] = backpack;
-                ++worn_backpack_count;
-            }
-        }
+		// Cache ent indices of backpacks worn by players.
+		for (int i = 1; i <= MaxClients; ++i)
+		{
+			int backpack = EntRefToEntIndex(g_character_backpacks[i]);
+			if (backpack != INVALID_ENT_REFERENCE)
+			{
+				worn_backpacks[worn_backpack_count][PLAYER] = i;
+				worn_backpacks[worn_backpack_count][BACKPACK] = backpack;
+				++worn_backpack_count;
+			}
+		}
 
-        char buffer[PLAYER_NAME_MAX];
-        char menu_item_text[64];
-        char menu_info[MENU_INFO_MAX];
+		char buffer[PLAYER_NAME_MAX];
+		char menu_item_text[64];
+		char menu_info[MENU_INFO_MAX];
 
-        // Find all backpacks that aren't worn by players.
-        int backpack_count = g_backpacks.Length;
-        for (int i = 0; i < backpack_count; ++i)
-        {
-            int backpack_ref = g_backpacks.Get(i, BACKPACK_ITEM_BOX);
-            int backpack = EntRefToEntIndex(backpack_ref);
-            if (backpack != INVALID_ENT_REFERENCE)
-            {
-                int worn_by = 0;
+		// Find all backpacks that aren't worn by players.
+		int backpack_count = g_backpacks.Length;
+		for (int i = 0; i < backpack_count; ++i)
+		{
+			int backpack_ref = g_backpacks.Get(i, BACKPACK_ITEM_BOX);
+			int backpack = EntRefToEntIndex(backpack_ref);
+			if (backpack != INVALID_ENT_REFERENCE)
+			{
+				int worn_by = 0;
 
-                for (int j = 0; j < worn_backpack_count && !worn_by; ++j)
-                {
-                    if (backpack == worn_backpacks[j][BACKPACK])
-                    {
-                        worn_by = worn_backpacks[j][PLAYER];
-                    }
-                }
+				for (int j = 0; j < worn_backpack_count && !worn_by; ++j)
+				{
+					if (backpack == worn_backpacks[j][BACKPACK])
+					{
+						worn_by = worn_backpacks[j][PLAYER];
+					}
+				}
 
-                if (worn_by != client)
-                {
-                    if (worn_by)
-                    {
-                        // Store client's user ID in menu info.
-                        menu_info[0] = 'p'; // Prefix info with 'p' so we can distinguish it in selection.
-                        IntToString(GetClientUserId(worn_by), menu_info[1], sizeof(menu_info) - 1);
+				if (worn_by != client)
+				{
+					if (worn_by)
+					{
+						// Store client's user ID in menu info.
+						menu_info[0] = 'p'; // Prefix info with 'p' so we can distinguish it in selection.
+						IntToString(GetClientUserId(worn_by), menu_info[1], sizeof(menu_info) - 1);
 
-                        // Show player's name.
-                        GetClientName(worn_by, buffer, sizeof(buffer));
-                        Format(menu_item_text, sizeof(menu_item_text), "%T", "@backpack-choice-player", client, buffer);
-                    }
-                    else
-                    {
-                        // Store backpack's ent reference in menu info.
-                        IntToString(backpack_ref, menu_info, sizeof(menu_info));
+						// Show player's name.
+						GetClientName(worn_by, buffer, sizeof(buffer));
+						Format(menu_item_text, sizeof(menu_item_text), "%T", "@backpack-choice-player", client, buffer);
+					}
+					else
+					{
+						// Store backpack's ent reference in menu info.
+						IntToString(backpack_ref, menu_info, sizeof(menu_info));
 
-                        // Show distance to backpack to help distinguish them.
-                        int distance = RoundToNearest(GetEntDistance(client, backpack));
-                        int len = Format(buffer, sizeof(buffer), "%14d - ", distance);
+						// Show distance to backpack to help distinguish them.
+						int distance = RoundToNearest(GetEntDistance(client, backpack));
+						int len = Format(buffer, sizeof(buffer), "%14d - ", distance);
 
-                        int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-                        if (backpack_index != -1)
-                        {
-                            int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
-                            g_backpack_type_names.GetString(backpack_type, buffer[len], sizeof(buffer) - len);
-                        }
+						int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+						if (backpack_index != -1)
+						{
+							int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
+							g_backpack_type_names.GetString(backpack_type, buffer[len], sizeof(buffer) - len);
+						}
 
-                        Format(menu_item_text, sizeof(menu_item_text), "%T", "@backpack-choice-distance", client, buffer);
-                    }
+						Format(menu_item_text, sizeof(menu_item_text), "%T", "@backpack-choice-distance", client, buffer);
+					}
 
-                    menu.AddItem(menu_info, menu_item_text);
-                }
-            }
-        }
+					menu.AddItem(menu_info, menu_item_text);
+				}
+			}
+		}
 
-        if (menu.ItemCount == 0)
-        {
-            ReplyToCommand(client, "[Backpack] %T", "@backpack-no-backpacks-found", client);
-            delete menu;
-        }
-        else
-        {
-            menu.Display(client, MENU_TIME_FOREVER);
-        }
-    }
+		if (menu.ItemCount == 0)
+		{
+			ReplyToCommand(client, "[Backpack] %T", "@backpack-no-backpacks-found", client);
+			delete menu;
+		}
+		else
+		{
+			menu.Display(client, MENU_TIME_FOREVER);
+		}
+	}
 }
 
 /**
@@ -1666,78 +1702,78 @@ void DisplayBringBackpackMenu(int client)
  */
 public int Menu_BringBackpack(Menu menu, MenuAction action, int param1, int param2)
 {
-    int result = 0;
+	int result = 0;
 
-    switch (action)
-    {
-    case MenuAction_Select:
-        {
-            int client = param1;
-            char info[MENU_INFO_MAX];
-            if (menu.GetItem(param2, info, sizeof(info)))
-            {
-                int worn_by = 0;
+	switch (action)
+	{
+	case MenuAction_Select:
+		{
+			int client = param1;
+			char info[MENU_INFO_MAX];
+			if (menu.GetItem(param2, info, sizeof(info)))
+			{
+				int worn_by = 0;
 
-                int backpack_ref = -1;
-                if (info[0] == 'p')
-                {
-                    // Client selected a player. Check if player still exists.
-                    int userid = StringToInt(info[1]);
-                    int target = GetClientOfUserId(userid);
+				int backpack_ref = -1;
+				if (info[0] == 'p')
+				{
+					// Client selected a player. Check if player still exists.
+					int userid = StringToInt(info[1]);
+					int target = GetClientOfUserId(userid);
 
-                    if (target != 0 && target != client)
-                    {
-                        backpack_ref = g_player_backpacks[target];
-                        worn_by = target;
-                    }
-                    else
-                    {
-                        ReplyToCommand(client, "[Backpack] %T", "Player no longer available", client);
-                    }
-                }
-                else
-                {
-                    // Client selected an unworn backpack.
-                    backpack_ref = StringToInt(info);
-                }
+					if (target != 0 && target != client)
+					{
+						backpack_ref = g_character_backpacks[target];
+						worn_by = target;
+					}
+					else
+					{
+						ReplyToCommand(client, "[Backpack] %T", "Player no longer available", client);
+					}
+				}
+				else
+				{
+					// Client selected an unworn backpack.
+					backpack_ref = StringToInt(info);
+				}
 
-                int backpack = EntRefToEntIndex(backpack_ref);
-                if (backpack != INVALID_ENT_REFERENCE)
-                {
-                    // Find out if it is being worn.
-                    for (int i = 1; i <= MaxClients && !worn_by; ++i)
-                    {
-                        if (backpack == EntRefToEntIndex(g_player_backpacks[i]))
-                        {
-                            worn_by = i;
-                        }
-                    }
+				int backpack = EntRefToEntIndex(backpack_ref);
+				if (backpack != INVALID_ENT_REFERENCE)
+				{
+					// Find out if it is being worn.
+					for (int i = 1; i <= MaxClients && !worn_by; ++i)
+					{
+						if (backpack == EntRefToEntIndex(g_character_backpacks[i]))
+						{
+							worn_by = i;
+						}
+					}
 
-                    if (worn_by != client)
-                    {
-                        if (worn_by)
-                        {
-                            TakeBackpackFrom(worn_by, client);
-                        }
-                        else
-                        {
-                            TeleportBackpackToClient(client, backpack);
-                        }
-                    }
-                }
-            }
+					if (worn_by != client)
+					{
+						if (worn_by)
+						{
+							TakeBackpackFrom(worn_by, client);
+						}
+						else
+						{
+							TeleportBackpackToEntity(client, backpack);
+						}
+					}
+				}
+			}
 
-            if (IsClientInGame(client) && !IsClientInKickQueue(client))
-            {
-                DisplayBringBackpackMenu(client);
-            }
-        }
+			if (IsClientInGame(client) && !IsClientInKickQueue(client))
+			{
+				DisplayBringBackpackMenu(client);
+			}
+		}
 
-    case MenuAction_End:
-        delete menu;
-    }
+	case MenuAction_End:
+		delete menu;
+	}
 
-    return result;
+	return result;
 }
 
 /**
@@ -1745,10 +1781,10 @@ public int Menu_BringBackpack(Menu menu, MenuAction action, int param1, int para
  */
 void TakeBackpackFrom(int owner, int taker)
 {
-    if (DropBackpack(owner, taker))
-    {
-        PrintToChat(owner, "%T", "@backpack-taken-notifier", owner);
-    }
+	if (DropBackpack(owner, taker))
+	{
+		PrintToChat(owner, "%T", "@backpack-taken-notifier", owner);
+	}
 }
 
 /**
@@ -1756,218 +1792,243 @@ void TakeBackpackFrom(int owner, int taker)
  */
 public Action Command_BringBackpack(int client, int args)
 {
-    if (client == 0)
-    {
-        ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
-    }
-    else if (args < 1)
-    {
-        // Show a menu of backpacks.
-        DisplayBringBackpackMenu(client);
-    }
-    else
-    {
-        char pattern[128];
-        GetCmdArg(1, pattern, sizeof(pattern));
+	if (client == 0)
+	{
+		ReplyToCommand(client, "[Backpack] %T", "@backpack-cannot-execute-as-server", client);
+	}
+	else if (args < 1)
+	{
+		// Show a menu of backpacks.
+		DisplayBringBackpackMenu(client);
+	}
+	else
+	{
+		char pattern[128];
+		GetCmdArg(1, pattern, sizeof(pattern));
 
-        char target_name[MAX_TARGET_LENGTH];
-        bool target_name_is_phrase = false;
+		char target_name[MAX_TARGET_LENGTH];
+		bool target_name_is_phrase = false;
 
-        int targets[MAXPLAYERS];
-        int target_count = ProcessTargetString(
-            pattern,
-            client,
-            targets,
-            sizeof(targets),
-            // Command only targets living players.
-            COMMAND_FILTER_ALIVE,
-            target_name,
-            sizeof(target_name),
-            target_name_is_phrase
-        );
+		int targets[MAXPLAYERS];
+		int target_count = ProcessTargetString(
+			pattern,
+			client,
+			targets,
+			sizeof(targets),
+			// Command only targets living players.
+			COMMAND_FILTER_ALIVE,
+			target_name,
+			sizeof(target_name),
+			target_name_is_phrase
+		);
 
-        if (target_count <= 0)
-        {
-            ReplyToTargetError(client, target_count);
-        }
-        else
-        {
-            // Bring backpacks worn by players targeted by command.
-            for (int i = 0; i < target_count; ++i)
-            {
-                int target = targets[i];
-                int backpack = EntRefToEntIndex(g_player_backpacks[target]);
-                if (client != target && backpack != INVALID_ENT_REFERENCE)
-                {
-                    int backpack_index = g_backpacks.FindValue(g_player_backpacks[target], BACKPACK_ITEM_BOX);
-                    if (backpack_index != -1 && TeleportBackpackToClient(client, backpack))
-                    {
-                        TakeBackpackFrom(target, client);
-                    }
-                }
-            }
+		if (target_count <= 0)
+		{
+			ReplyToTargetError(client, target_count);
+		}
+		else
+		{
+			// Bring backpacks worn by players targeted by command.
+			for (int i = 0; i < target_count; ++i)
+			{
+				int target = targets[i];
+				int backpack = EntRefToEntIndex(g_character_backpacks[target]);
+				if (client != target && backpack != INVALID_ENT_REFERENCE)
+				{
+					int backpack_index = g_backpacks.FindValue(g_character_backpacks[target], BACKPACK_ITEM_BOX);
+					if (backpack_index != -1 && TeleportBackpackToEntity(client, backpack))
+					{
+						TakeBackpackFrom(target, client);
+					}
+				}
+			}
 
-            if (target_name_is_phrase)
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-bring-cmd-reply-t", client, target_name);
-            }
-            else
-            {
-                ReplyToCommand(client, "[Backpack] %T", "@backpack-bring-cmd-reply-s", client, target_name);
-            }
-        }
-    }
+			if (target_name_is_phrase)
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-bring-cmd-reply-t", client, target_name);
+			}
+			else
+			{
+				ReplyToCommand(client, "[Backpack] %T", "@backpack-bring-cmd-reply-s", client, target_name);
+			}
+		}
+	}
 
-    return Plugin_Handled;
+	return Plugin_Handled;
 }
 
 /**
  * Backpack admin menu category callback.
  */
 public void AdminMenu_Backpack(TopMenu topmenu,
-    TopMenuAction action,
-    TopMenuObject object_id,
-    int client,
-    char[] buffer,
-    int maxlength)
+	TopMenuAction action,
+	TopMenuObject object_id,
+	int client,
+	char[] buffer,
+	int maxlength)
 {
-    if (action == TopMenuAction_DisplayOption ||
-        action == TopMenuAction_DisplayTitle)
-    {
-        Format(buffer, maxlength, "%T", "@backpack-menu-title", client);
-    }
+	if (action == TopMenuAction_DisplayOption ||
+		action == TopMenuAction_DisplayTitle)
+	{
+		Format(buffer, maxlength, "%T", "@backpack-menu-title", client);
+	}
 }
 
 /**
  * Create Backpack admin menu callback.
  */
 public void AdminMenu_CreateBackpack(TopMenu topmenu,
-    TopMenuAction action,
-    TopMenuObject object_id,
-    int client,
-    char[] buffer,
-    int maxlength)
+	TopMenuAction action,
+	TopMenuObject object_id,
+	int client,
+	char[] buffer,
+	int maxlength)
 {
-    if (action == TopMenuAction_DisplayOption)
-    {
-        Format(buffer, maxlength, "%T", "@backpack-menu-create", client);
-    }
-    else if (action == TopMenuAction_SelectOption)
-    {
-        if (g_backpack_types.Length == 1)
-        {
-            Command_CreateBackpack(client, 0);
-        }
-        else
-        {
-            DisplayCreateBackpackMenu(client);
-        }
-    }
+	if (action == TopMenuAction_DisplayOption)
+	{
+		Format(buffer, maxlength, "%T", "@backpack-menu-create", client);
+	}
+	else if (action == TopMenuAction_SelectOption)
+	{
+		if (g_backpack_types.Length == 1)
+		{
+			Command_CreateBackpack(client, 0);
+		}
+		else
+		{
+			DisplayCreateBackpackMenu(client);
+		}
+	}
 }
 
 /**
  * Remove Backpack admin menu callback.
  */
 public void AdminMenu_RemoveBackpack(TopMenu topmenu,
-    TopMenuAction action,
-    TopMenuObject object_id,
-    int client,
-    char[] buffer,
-    int maxlength)
+	TopMenuAction action,
+	TopMenuObject object_id,
+	int client,
+	char[] buffer,
+	int maxlength)
 {
-    if (action == TopMenuAction_DisplayOption)
-    {
-        Format(buffer, maxlength, "%T", "@backpack-menu-remove", client);
-    }
-    else if (action == TopMenuAction_SelectOption)
-    {
-        Command_RemoveBackpack(client, 0);
-    }
+	if (action == TopMenuAction_DisplayOption)
+	{
+		Format(buffer, maxlength, "%T", "@backpack-menu-remove", client);
+	}
+	else if (action == TopMenuAction_SelectOption)
+	{
+		Command_RemoveBackpack(client, 0);
+	}
 }
 
 /**
  * Bring Backpack admin menu callback.
  */
 public void AdminMenu_BringBackpack(TopMenu topmenu,
-    TopMenuAction action,
-    TopMenuObject object_id,
-    int client,
-    char[] buffer,
-    int maxlength)
+	TopMenuAction action,
+	TopMenuObject object_id,
+	int client,
+	char[] buffer,
+	int maxlength)
 {
-    if (action == TopMenuAction_DisplayOption)
-    {
-        Format(buffer, maxlength, "%T", "@backpack-menu-bring", client);
-    }
-    else if (action == TopMenuAction_SelectOption)
-    {
-        Command_BringBackpack(client, 0);
-    }
+	if (action == TopMenuAction_DisplayOption)
+	{
+		Format(buffer, maxlength, "%T", "@backpack-menu-bring", client);
+	}
+	else if (action == TopMenuAction_SelectOption)
+	{
+		Command_BringBackpack(client, 0);
+	}
 }
 
 public void OnPluginEnd()
 {
-    if (!DHookDisableDetour(g_detour_baseentity_start_fade_out, DHOOK_PRE, Detour_BaseEntity_StartFadeOut))
-    {
-        LogError("Failed to remove detour SUB_StartFadeOut");
-    }
+	if (!DHookDisableDetour(g_detour_baseentity_start_fade_out, DHOOK_PRE, Detour_BaseEntity_StartFadeOut))
+	{
+		LogError("Failed to remove detour SUB_StartFadeOut");
+	}
 
-    if (!DHookDisableDetour(g_detour_itembox_player_take_items, DHOOK_PRE, Detour_ItemBox_PlayerTakeItems))
-    {
-        LogError("Failed to remove detour PlayerTakeItems");
-    }
+	if (!DHookDisableDetour(g_detour_itembox_player_take_items, DHOOK_PRE, Detour_ItemBox_PlayerTakeItems))
+	{
+		LogError("Failed to remove detour PlayerTakeItems");
+	}
 
-    if (!DHookDisableDetour(g_detour_ammobox_fall_init, DHOOK_POST, Detour_BaseItem_FallInitPost))
-    {
-        LogError("Failed to detour AmmoBox::FallInit post");
-    }
-    if (!DHookDisableDetour(g_detour_ammobox_fall_init, DHOOK_PRE, Detour_BaseItem_FallInit))
-    {
-        LogError("Failed to remove detour AmmoBox::FallInit");
-    }
+	if (!DHookDisableDetour(g_detour_ammobox_fall_init, DHOOK_POST, Detour_BaseItem_FallInitPost))
+	{
+		LogError("Failed to detour AmmoBox::FallInit post");
+	}
+	if (!DHookDisableDetour(g_detour_ammobox_fall_init, DHOOK_PRE, Detour_BaseItem_FallInit))
+	{
+		LogError("Failed to remove detour AmmoBox::FallInit");
+	}
 
-    if (!DHookDisableDetour(g_detour_ammobox_fall_think, DHOOK_POST, Detour_BaseItem_FallThinkPost))
-    {
-        LogError("Failed to remove detour AmmoBox::FallThink post");
-    }
-    if (!DHookDisableDetour(g_detour_ammobox_fall_think, DHOOK_PRE, Detour_BaseItem_FallThink))
-    {
-        LogError("Failed to remove detour AmmoBox::FallThink");
-    }
+	if (!DHookDisableDetour(g_detour_ammobox_fall_think, DHOOK_POST, Detour_BaseItem_FallThinkPost))
+	{
+		LogError("Failed to remove detour AmmoBox::FallThink post");
+	}
+	if (!DHookDisableDetour(g_detour_ammobox_fall_think, DHOOK_PRE, Detour_BaseItem_FallThink))
+	{
+		LogError("Failed to remove detour AmmoBox::FallThink");
+	}
 
-    if (!DHookDisableDetour(g_detour_player_get_speed_factor, DHOOK_POST, Detour_Player_GetWeightSpeedFactorPost))
-    {
-        LogError("Failed to remove detour CNMRiH_Player::GetWeightSpeedFactor post");
-    }
-    if (!DHookDisableDetour(g_detour_player_get_speed_factor, DHOOK_PRE, Detour_Player_GetWeightSpeedFactor))
-    {
-        LogError("Failed to remove detour CNMRiH_Player::GetWeightSpeedFactor");
-    }
+	if (!DHookDisableDetour(g_detour_player_get_speed_factor, DHOOK_POST, Detour_Player_GetWeightSpeedFactorPost))
+	{
+		LogError("Failed to remove detour CNMRiH_Player::GetWeightSpeedFactor post");
+	}
+	if (!DHookDisableDetour(g_detour_player_get_speed_factor, DHOOK_PRE, Detour_Player_GetWeightSpeedFactor))
+	{
+		LogError("Failed to remove detour CNMRiH_Player::GetWeightSpeedFactor");
+	}
 }
 
 public void OnMapStart()
 {
-    char model[PLATFORM_MAX_PATH];
+	char model[PLATFORM_MAX_PATH];
 
-    int backpack_types = g_backpack_types.Length;
-    for (int i = 0; i < backpack_types; ++i)
-    {
-        g_backpack_type_itembox_models.GetString(i, model, sizeof(model));
-        PrecacheModel2(model);
+	int backpack_types = g_backpack_types.Length;
+	for (int i = 0; i < backpack_types; ++i)
+	{
+		g_backpack_type_itembox_models.GetString(i, model, sizeof(model));
+		PrecacheModel2(model);
 
-        g_backpack_type_ornament_models.GetString(i, model, sizeof(model));
-        PrecacheModel2(model);
+		g_backpack_type_ornament_models.GetString(i, model, sizeof(model));
+		PrecacheModel2(model);
 
-        int tuple[BACKPACK_TYPE_TUPLE_SIZE];
-        g_backpack_types.GetArray(i, tuple);
+		int tuple[BACKPACK_TYPE_TUPLE_SIZE];
+		g_backpack_types.GetArray(i, tuple);
 
-        PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_OPEN_SOUNDS));
-        PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_DROP_SOUNDS));
-        PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_WEAR_SOUNDS));
-        PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_ADD_SOUNDS));
-    }
+		PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_OPEN_SOUNDS));
+		PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_DROP_SOUNDS));
+		PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_WEAR_SOUNDS));
+		PrecacheSoundList(TupleGetArrayList(tuple, BACKPACK_TYPE_ADD_SOUNDS));
+	}
 
-    ResetPlugin();
+	if (g_plugin_loaded_late)
+	{
+		// Hook existing players and entities
+		for (int i = 1; i <= MaxClients; ++i)
+			if (IsClientInGame(i))
+				OnClientPostAdminCheck(i);
+
+		int maxEnts = GetMaxEntities();
+		for (int e = MaxClients+1; e < maxEnts; e++)
+		{
+			if (!IsValidEdict(e))
+				continue;
+			
+			if (IsEntityWeapon(e))
+			{
+				OnWeaponSpawned(e);
+			}
+			else if (IsEntityZombie(e))
+			{
+				OnZombieSpawned(e);
+			}
+		}
+	}
+	
+
+	ResetPlugin();
 }
 
 /**
@@ -1975,25 +2036,46 @@ public void OnMapStart()
  */
 public void OnEntityCreated(int entity, const char[] classname)
 {
-    HandleNewEntity(entity, true);
+	if (IsEntityWeapon(entity))
+		SDKHook(entity, SDKHook_SpawnPost, OnWeaponSpawned);
+
+	else if (StrContains(classname, "npc_nmrih_") == 0)
+		SDKHook(entity, SDKHook_SpawnPost, OnZombieSpawned);
 }
 
-/**
- *
- */
-void HandleNewEntity(int entity, bool spawning)
+bool IsEntityWeapon(int entity)
 {
-    if (IsValidEntity(entity))
-    {
-        if (spawning)
-        {
-            SDKHook(entity, SDKHook_SpawnPost, Hook_DHookWeaponFall);
-        }
-        else
-        {
-            Hook_DHookWeaponFall(entity);
-        }
-    }
+	return HasEntProp(entity, Prop_Send, "m_flNextPrimaryAttack");
+}
+
+public void OnWeaponSpawned(int weapon)
+{
+	DHookEntity(g_dhook_weaponbase_fall_init, DHOOK_POST, weapon, .callback = DHook_WeaponBase_FallInitPost);
+	DHookEntity(g_dhook_weaponbase_fall_think, DHOOK_POST, weapon, .callback = DHook_WeaponBase_FallThinkPost);
+}
+
+public void OnZombieSpawned(int zombie)
+{
+	float npc_bp_chance = g_cvar_backpack_npc_chance.FloatValue;
+	if (npc_bp_chance <= 0.0 || IsZombieCrawler(zombie))
+		return;
+
+	float rnd = GetURandomFloat();
+	// PrintToServer("%f <= %f", rnd, npc_bp_chance);
+	if (rnd <= npc_bp_chance && CanZombieWearBackpack(zombie))
+	{
+		CreateTimer(0.1, Timer_GiveBackpackZombie, EntIndexToEntRef(zombie));
+	}
+}
+
+Action Timer_GiveBackpackZombie(Handle timer, int zombieref)
+{
+	int zombie = EntRefToEntIndex(zombieref);
+	if (zombie != -1)
+	{
+		int backpack = CreateBackpack(RandomBackpackType(zombie));
+		PickupBackpack(zombie, backpack);	
+	}
 }
 
 /**
@@ -2001,21 +2083,21 @@ void HandleNewEntity(int entity, bool spawning)
  */
 public void Hook_DHookWeaponFall(int entity)
 {
-    if (SDKCall(g_sdkcall_entity_is_combat_weapon, entity))
-    {
-        DHookEntity(g_dhook_weaponbase_fall_init, DHOOK_POST, entity, .callback = DHook_WeaponBase_FallInitPost);
-        DHookEntity(g_dhook_weaponbase_fall_think, DHOOK_POST, entity, .callback = DHook_WeaponBase_FallThinkPost);
-    }
+	if (IsEntityWeapon(entity))
+	{
+		DHookEntity(g_dhook_weaponbase_fall_init, DHOOK_POST, entity, .callback = DHook_WeaponBase_FallInitPost);
+		DHookEntity(g_dhook_weaponbase_fall_think, DHOOK_POST, entity, .callback = DHook_WeaponBase_FallThinkPost);
+	}
 }
 
 int PrecacheModel2(const char[] model_path)
 {
-    int index = PrecacheModel(model_path, true);
-    if (index == 0)
-    {
-        LogMessage("Warning: Could not precache model '%s'", model_path);
-    }
-    return index;
+	int index = PrecacheModel(model_path, true);
+	if (index == 0)
+	{
+		LogMessage("Warning: Could not precache model '%s'", model_path);
+	}
+	return index;
 }
 
 /**
@@ -2025,17 +2107,17 @@ int PrecacheModel2(const char[] model_path)
  */
 void PrecacheSoundList(ArrayList sounds)
 {
-    char sound[PLATFORM_MAX_PATH];
+	char sound[PLATFORM_MAX_PATH];
 
-    int sound_count = sounds.Length;
-    for (int i = 0; i < sound_count; ++i)
-    {
-        sounds.GetString(i, sound, sizeof(sound));
-        if (!PrecacheSound(sound[1], true))
-        {
-            LogMessage("Warning: Could not precache sound '%s'", sound[1]);
-        }
-    }
+	int sound_count = sounds.Length;
+	for (int i = 0; i < sound_count; ++i)
+	{
+		sounds.GetString(i, sound, sizeof(sound));
+		if (!PrecacheSound(sound[1], true))
+		{
+			LogMessage("Warning: Could not precache sound '%s'", sound[1]);
+		}
+	}
 }
 
 /**
@@ -2043,7 +2125,7 @@ void PrecacheSoundList(ArrayList sounds)
  */
 public bool Trace_BackpackDrop(int entity, int contents_mask)
 {
-    return entity == 0 || entity > MaxClients;
+	return entity == 0 || entity > MaxClients;
 }
 
 /**
@@ -2052,36 +2134,36 @@ public bool Trace_BackpackDrop(int entity, int contents_mask)
  */
 bool TraceBackpackPosition(int client, float pos[3], float angles[3])
 {
-    static const float DROP_DISTANCE = 48.0;
+	static const float DROP_DISTANCE = 48.0;
 
-    float origin[3];
-    GetClientEyePosition(client, origin);
+	float origin[3];
+	GetClientEyePosition(client, origin);
 
-    GetClientEyeAngles(client, angles);
+	GetClientEyeAngles(client, angles);
 
-    float direction[3];
-    GetAngleVectors(angles, direction, NULL_VECTOR, NULL_VECTOR);
-    ScaleVector(direction, DROP_DISTANCE);
+	float direction[3];
+	GetAngleVectors(angles, direction, NULL_VECTOR, NULL_VECTOR);
+	ScaleVector(direction, DROP_DISTANCE);
 
-    AddVectors(origin, direction, pos);
+	AddVectors(origin, direction, pos);
 
-    float bounds_min[3] = { -10.0, ... };
-    float bounds_max[3] = { 10.0, ... };
+	float bounds_min[3] = { -10.0, ... };
+	float bounds_max[3] = { 10.0, ... };
 
-    TR_TraceHullFilter(origin, pos, bounds_min, bounds_max, MASK_SOLID, Trace_BackpackDrop);
-    float fraction = TR_GetFraction();
+	TR_TraceHullFilter(origin, pos, bounds_min, bounds_max, MASK_SOLID, Trace_BackpackDrop);
+	float fraction = TR_GetFraction();
 
-    ScaleVector(direction, fraction);
-    AddVectors(origin, direction, pos);
+	ScaleVector(direction, fraction);
+	AddVectors(origin, direction, pos);
 
-    // Restrict backpack's rotation to yaw.
-    angles[X] = 0.0;
-    angles[Z] = 0.0;
+	// Restrict backpack's rotation to yaw.
+	angles[X] = 0.0;
+	angles[Z] = 0.0;
 
-    // Put glowsticks towards dropper.
-    angles[Y] += 180.0;
+	// Put glowsticks towards dropper.
+	angles[Y] += 180.0;
 
-    return !TR_PointOutsideWorld(pos);
+	return !TR_PointOutsideWorld(pos);
 }
 
 /**
@@ -2091,13 +2173,13 @@ bool TraceBackpackPosition(int client, float pos[3], float angles[3])
  */
 void DetachBackpack(int backpack_index)
 {
-    // Detach the backpack ornament.
-    int ornament = EntRefToEntIndex(g_backpacks.Get(backpack_index, BACKPACK_ORNAMENT));
-    if (ornament != INVALID_ENT_REFERENCE)
-    {
-        AcceptEntityInput(ornament, "Detach");
-        AcceptEntityInput(ornament, "ClearParent");
-    }
+	// Detach the backpack ornament.
+	int ornament = EntRefToEntIndex(g_backpacks.Get(backpack_index, BACKPACK_ORNAMENT));
+	if (ornament != INVALID_ENT_REFERENCE)
+	{
+		AcceptEntityInput(ornament, "Detach");
+		AcceptEntityInput(ornament, "ClearParent");
+	}
 }
 
 /**
@@ -2105,31 +2187,41 @@ void DetachBackpack(int backpack_index)
  *
  * This function assumes that the backpack isn't worn by anybody.
  *
- * @param client                Client to use as destination point.
+ * @param entity                Entity to use as destination point.
  * @param backpack              Ent index of backpack.
  */
-bool TeleportBackpackToClient(int client, int backpack)
+bool TeleportBackpackToEntity(int entity, int backpack)
 {
-    bool teleported = false;
 
-    // Hull sweep in direction of player's camera for backpack
-    // drop location.
-    float pos[3];
-    float angles[3];
-    if (TraceBackpackPosition(client, pos, angles))
-    {
-        TeleportEntity(backpack, pos, angles, NULL_VECTOR);
-        AcceptEntityInput(backpack, "EnableMotion");
-        SDKCall(g_sdkcall_baseentity_set_collision_group, backpack, COLLISION_GROUP_DEBRIS);
+	float origin[3];
+	float angles[3];
 
-        teleported = true;
-    }
-    else
-    {
-        ReplyToCommand(client, "[Backpack] %T", "@backpack-invalid-position", client);
-    }
+	if (IsEntityPlayer(entity))
+	{
+		// Hull sweep in direction of player's camera for backpack
+		// drop location.
+		if (!TraceBackpackPosition(entity, origin, angles))
+		{
+			PrintToChat(entity, "[Backpack] %t", "@backpack-invalid-position");
+			return false;
+		}  
+	}
+	else
+	{
+		GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
+		GetEntPropVector(entity, Prop_Data, "m_angRotation", angles);
+		origin[2] += 40.0; // Right now it's just zombies, so raise Z a bit
+	}
 
-    return teleported;
+	TeleportEntity(backpack, origin, angles, NULL_VECTOR);
+	AcceptEntityInput(backpack, "EnableMotion");
+	SDKCall(g_sdkcall_baseentity_set_collision_group, backpack, COLLISION_GROUP_DEBRIS);
+	return true;
+}
+
+bool IsEntityPlayer(int entity)
+{
+	return 0 < entity <= MaxClients;
 }
 
 /**
@@ -2142,37 +2234,36 @@ bool TeleportBackpackToClient(int client, int backpack)
  */
 bool DropBackpack(int owner, int target = 0)
 {
-    bool dropped = false;
+	bool dropped = false;
 
-    if (target <= 0)
-    {
-        target = owner;
-    }
+	if (target <= 0)
+	{
+		target = owner;
+	}
 
-    int backpack_index = g_backpacks.FindValue(g_player_backpacks[owner], BACKPACK_ITEM_BOX);
-    int backpack = EntRefToEntIndex(g_player_backpacks[owner]);
+	int backpack_index = g_backpacks.FindValue(g_character_backpacks[owner], BACKPACK_ITEM_BOX);
+	int backpack = EntRefToEntIndex(g_character_backpacks[owner]);
 
-    if (backpack_index != -1 &&
-        backpack != INVALID_ENT_REFERENCE &&
-        TeleportBackpackToClient(target, backpack))
-    {
-        // Remove the ornament.
-        DetachBackpack(backpack_index);
+	if (backpack_index != -1 && backpack != INVALID_ENT_REFERENCE)
+	{
+		TeleportBackpackToEntity(target, backpack);
 
-        // Play backpack unequip sound.
-        static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
-        PlayBackpackSound(owner, backpack_index, BACKPACK_TYPE_DROP_SOUNDS, previous);
+		// Remove the ornament.
+		DetachBackpack(backpack_index);
 
-        // Start glowing backpack again.
-        if (g_cvar_backpack_glow.BoolValue)
-            RequestFrame(Frame_EnableGlow, EntIndexToEntRef(backpack));
+		// Play backpack unequip sound.
+		static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
+		PlayBackpackSound(owner, backpack_index, BACKPACK_TYPE_DROP_SOUNDS, previous);
 
-        ResetPlayer(owner);
+		// Make backpack glow again
+		ToggleHighlight(backpack_index, true);
 
-        dropped = true;
-    }
+		ResetCarrier(owner);
 
-    return dropped;
+		dropped = true;
+	}
+
+	return dropped;
 }
 
 
@@ -2186,42 +2277,42 @@ bool DropBackpack(int owner, int target = 0)
  */
 void PlayBackpackSound(int source, int backpack_index, eBackpackTypeTuple sound_type, int previous[SHUFFLE_SOUND_COUNT])
 {
-    if (backpack_index < 0 ||
-        backpack_index >= g_backpacks.Length ||
-        sound_type < BACKPACK_TYPE_OPEN_SOUNDS ||
-        sound_type > BACKPACK_TYPE_ADD_SOUNDS)
-    {
-        return;
-    }
+	if (backpack_index < 0 ||
+		backpack_index >= g_backpacks.Length ||
+		sound_type < BACKPACK_TYPE_OPEN_SOUNDS ||
+		sound_type > BACKPACK_TYPE_ADD_SOUNDS)
+	{
+		return;
+	}
 
-    int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
-    if (backpack_type >= 0 && backpack_type < g_backpack_types.Length)
-    {
-        ArrayList sounds = view_as<ArrayList>(g_backpack_types.Get(backpack_type, sound_type));
+	int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
+	if (backpack_type >= 0 && backpack_type < g_backpack_types.Length)
+	{
+		ArrayList sounds = view_as<ArrayList>(g_backpack_types.Get(backpack_type, sound_type));
 
-        int sound_count = sounds ? sounds.Length : 0;
-        if (sound_count > 0)
-        {
-            int index = ShuffleSoundIndex(sound_count, previous);
+		int sound_count = sounds ? sounds.Length : 0;
+		if (sound_count > 0)
+		{
+			int index = ShuffleSoundIndex(sound_count, previous);
 
-            char sound[PLATFORM_MAX_PATH];
-            sounds.GetString(index, sound, sizeof(sound));
-            int layers = sound[0];
+			char sound[PLATFORM_MAX_PATH];
+			sounds.GetString(index, sound, sizeof(sound));
+			int layers = sound[0];
 
-            for (int i = 0; i < layers; ++i)
-            {
-                EmitSoundToAll(sound[1], source);
-            }
-        }
-    }
+			for (int i = 0; i < layers; ++i)
+			{
+				EmitSoundToAll(sound[1], source);
+			}
+		}
+	}
 }
 
 /**
  * Mark player as not wearing a backpack.
  */
-void ResetPlayer(int client)
+void ResetCarrier(int entity)
 {
-    g_player_backpacks[client] = -1;
+	g_character_backpacks[entity] = -1;
 }
 
 /**
@@ -2229,13 +2320,13 @@ void ResetPlayer(int client)
  */
 public void OnClientPostAdminCheck(int client)
 {
-    ResetPlayer(client);
+	ResetCarrier(client);
 
-    SDKHook(client, SDKHook_WeaponSwitch, Hook_PlayerWeaponSwitch);
+	SDKHook(client, SDKHook_WeaponSwitch, Hook_PlayerWeaponSwitch);
 
-    // Forcibly call WeaponSwitch for current weapon.
-    int active_weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-    Hook_PlayerWeaponSwitch(IGNORE_CURRENT_WEAPON | client, active_weapon);
+	// Forcibly call WeaponSwitch for current weapon.
+	int active_weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	Hook_PlayerWeaponSwitch(IGNORE_CURRENT_WEAPON | client, active_weapon);
 }
 
 /**
@@ -2243,7 +2334,13 @@ public void OnClientPostAdminCheck(int client)
  */
 public void OnClientDisconnect(int client)
 {
-    DropBackpack(client);
+	DropBackpack(client);
+}
+
+public void OnEntityDestroyed(int entity)
+{
+	if (IsValidEdict(entity) && IsValidEntity(g_character_backpacks[entity]))
+		DropBackpack(entity);
 }
 
 /**
@@ -2251,29 +2348,51 @@ public void OnClientDisconnect(int client)
  */
 public void Event_PlayerSpawn(Event event, const char[] name, bool no_broadcast)
 {
-    int userid = event.GetInt("userid");
-    int client = GetClientOfUserId(userid);
+	int userid = event.GetInt("userid");
+	int client = GetClientOfUserId(userid);
 
-    if (client != 0 && NMRiH_IsPlayerAlive(client))
-    {
-        if (g_round_state == ROUND_STATE_RESTARTING)
-        {
-            // Wait a frame and then randomly spawn backpacks for existing players.
-            RequestFrame(OnFrame_SpawnBackpacks, 0);
-            g_round_state = ROUND_STATE_WAITING;
-        }
-        else if (g_round_state == ROUND_STATE_STARTED &&
-            g_backpacks.Length < g_cvar_backpack_count.IntValue &&
-            EntRefToEntIndex(g_player_backpacks[client]) == INVALID_ENT_REFERENCE &&
-            CanPlayerWearBackpack(client) &&
-            CanPlayerOpenBackpack(client))
-        {
-            // Spawn backpacks for new players.
-            int backpack = CreateBackpack(ZERO_VEC, ZERO_VEC, RandomBackpackType(client));
-            PickupBackpack(client, backpack);
-            PrintToChat(client, "%T", "@backpack-spawn-notifier", client);
-        }
-    }
+	if (client != 0 && NMRiH_IsPlayerAlive(client))
+	{
+		if (g_round_state == ROUND_STATE_RESTARTING)
+		{
+			// Wait a frame and then randomly spawn backpacks for existing players.
+			RequestFrame(OnFrame_SpawnBackpacks, 0);
+			g_round_state = ROUND_STATE_WAITING;
+		}
+		else if (g_round_state == ROUND_STATE_STARTED)
+		{
+			if (CountPlayerOwnedBackpacks() >= g_cvar_backpack_count.IntValue)
+				return;
+
+			if (IsValidEdict(g_character_backpacks[client]))
+				return;
+			
+			if (!CanPlayerWearBackpack(client))
+				return;
+
+			if (!CanPlayerOpenBackpack(client))
+				return;
+	
+			// Spawn backpacks for new players.
+			int type = RandomBackpackType(client);
+			int backpack = CreateBackpack(type);
+			PickupBackpack(client, backpack);
+			PrintToChat(client, "%T", "@backpack-spawn-notifier", client);
+		}
+	}
+}
+
+int CountPlayerOwnedBackpacks()
+{
+	int count;
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (IsClientInGame(i) && IsValidEdict(g_character_backpacks[i]))
+		{
+			count++;
+		}
+	}
+	return count;
 }
 
 /**
@@ -2281,13 +2400,13 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool no_broadcast)
  */
 void ShuffleArray(int[] values, int elements)
 {
-    for (int i = elements - 1; i > 0; --i)
-    {
-        int j = GetURandomInt() % (i + 1);
-        int swap = values[i];
-        values[i] = values[j];
-        values[j] = swap;
-    }
+	for (int i = elements - 1; i > 0; --i)
+	{
+		int j = GetURandomInt() % (i + 1);
+		int swap = values[i];
+		values[i] = values[j];
+		values[j] = swap;
+	}
 }
 
 /**
@@ -2295,42 +2414,42 @@ void ShuffleArray(int[] values, int elements)
  */
 public void OnFrame_SpawnBackpacks(int unused)
 {
-    int players[MAXPLAYERS];
-    int player_count = 0;
+	int players[MAXPLAYERS];
+	int player_count = 0;
 
-    for (int i = 1; i <= MaxClients; ++i)
-    {
-        if (EntRefToEntIndex(g_player_backpacks[i]) == INVALID_ENT_REFERENCE &&
-            NMRiH_IsPlayerAlive(i) &&
-            CanPlayerWearBackpack(i) &&
-            CanPlayerOpenBackpack(i))
-        {
-            players[player_count] = i;
-            ++player_count;
-        }
-    }
+	for (int i = 1; i <= MaxClients; ++i)
+	{
+		if (EntRefToEntIndex(g_character_backpacks[i]) == INVALID_ENT_REFERENCE &&
+			NMRiH_IsPlayerAlive(i) &&
+			CanPlayerWearBackpack(i) &&
+			CanPlayerOpenBackpack(i))
+		{
+			players[player_count] = i;
+			++player_count;
+		}
+	}
 
-    ShuffleArray(players, player_count);
+	ShuffleArray(players, player_count);
 
-    int backpack_count = g_cvar_backpack_count.IntValue - g_backpacks.Length;
-    for (int i = 0; i < backpack_count && i < player_count; ++i)
-    {
-        int client = players[i];
+	int backpack_count = g_cvar_backpack_count.IntValue - CountPlayerOwnedBackpacks();
+	for (int i = 0; i < backpack_count && i < player_count; ++i)
+	{
+		int client = players[i];
 
-        int backpack = CreateBackpack(ZERO_VEC, ZERO_VEC, RandomBackpackType(client));
-        if (backpack != -1)
-        {
-            PickupBackpack(client, backpack);
-            PrintToChat(client, "%T", "@backpack-spawn-notifier", client);
-        }
-        else
-        {
-            // Increment backpack counter to ignore failed backpack spawn.
-            ++backpack_count;
-        }
-    }
+		int backpack = CreateBackpack(RandomBackpackType(client));
+		if (backpack != -1)
+		{
+			PickupBackpack(client, backpack);
+			PrintToChat(client, "%T", "@backpack-spawn-notifier", client);
+		}
+		else
+		{
+			// Increment backpack counter to ignore failed backpack spawn.
+			++backpack_count;
+		}
+	}
 
-    g_round_state = ROUND_STATE_STARTED;
+	g_round_state = ROUND_STATE_STARTED;
 }
 
 /**
@@ -2338,12 +2457,12 @@ public void OnFrame_SpawnBackpacks(int unused)
  */
 public void Event_PlayerDeath(Event event, const char[] name, bool no_broadcast)
 {
-    int client = GetClientOfUserId(event.GetInt("userid"));
+	int client = GetClientOfUserId(event.GetInt("userid"));
 
-    if (client != 0)
-    {
-        DropBackpack(client);
-    }
+	if (client != 0)
+	{
+		DropBackpack(client);
+	}
 }
 
 /**
@@ -2351,20 +2470,20 @@ public void Event_PlayerDeath(Event event, const char[] name, bool no_broadcast)
  */
 public void Event_PlayerExtracted(Event event, const char[] name, bool no_broadcast)
 {
-    int client = event.GetInt("player_id");
-    if (client > 0 && client <= MaxClients)
-    {
-        int backpack_ref = g_player_backpacks[client];
-        if (EntRefToEntIndex(backpack_ref) != INVALID_ENT_REFERENCE)
-        {
-            int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-            if (backpack_index != -1)
-            {
-                ResetPlayer(client);
-                RemoveBackpackByIndex(backpack_index);
-            }
-        }
-    }
+	int client = event.GetInt("player_id");
+	if (client > 0 && client <= MaxClients)
+	{
+		int backpack_ref = g_character_backpacks[client];
+		if (EntRefToEntIndex(backpack_ref) != INVALID_ENT_REFERENCE)
+		{
+			int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+			if (backpack_index != -1)
+			{
+				ResetCarrier(client);
+				RemoveBackpackByIndex(backpack_index);
+			}
+		}
+	}
 }
 
 /**
@@ -2372,18 +2491,18 @@ public void Event_PlayerExtracted(Event event, const char[] name, bool no_broadc
  */
 void ResetPlugin()
 {
-    g_round_state = ROUND_STATE_RESTARTING;
-    g_next_backpack_hue = GetURandomInt() % 256;
+	g_round_state = ROUND_STATE_RESTARTING;
+	g_next_backpack_hue = GetURandomInt() % 256;
 
-    g_backpacks.Clear();
-    g_backpack_clips.Clear();
-    g_backpack_gear_clips.Clear();
-    g_backpack_ammos.Clear();
+	g_backpacks.Clear();
+	g_backpack_clips.Clear();
+	g_backpack_gear_clips.Clear();
+	g_backpack_ammos.Clear();
 
-    for (int i = 0; i <= MaxClients; ++i)
-    {
-        ResetPlayer(i);
-    }
+	for (int i = 0; i <= MaxClients; ++i)
+	{
+		ResetCarrier(i);
+	}
 }
 
 /**
@@ -2391,7 +2510,7 @@ void ResetPlugin()
  */
 public void Event_GameRestarting(Event event, const char[] name, bool no_broadcast)
 {
-    ResetPlugin();
+	ResetPlugin();
 }
 
 /**
@@ -2402,89 +2521,110 @@ public void Event_GameRestarting(Event event, const char[] name, bool no_broadca
  */
 public Action Hook_PlayerWeaponSwitch(int client, int weapon)
 {
-    bool ignore_current_weapon = (client & IGNORE_CURRENT_WEAPON) != 0;
-    client &= ~IGNORE_CURRENT_WEAPON;
+	bool ignore_current_weapon = (client & IGNORE_CURRENT_WEAPON) != 0;
+	client &= ~IGNORE_CURRENT_WEAPON;
 
-    int active_weapon = GetClientActiveWeapon(client);
-    if (IsValidEdict(weapon) && (ignore_current_weapon || weapon != active_weapon))
-    {
-        g_player_fists_equipped[client] = false;
+	int active_weapon = GetClientActiveWeapon(client);
+	if (IsValidEdict(weapon) && (ignore_current_weapon || weapon != active_weapon))
+	{
+		g_player_fists_equipped[client] = false;
 
-        char weapon_name[CLASSNAME_MAX];
-        if (IsClassnameEqual(weapon, weapon_name, sizeof(weapon_name), ME_FISTS))
-        {
-            g_player_fists_equipped[client] = true;
-        }
-    }
+		char weapon_name[CLASSNAME_MAX];
+		if (IsClassnameEqual(weapon, weapon_name, sizeof(weapon_name), ME_FISTS))
+		{
+			g_player_fists_equipped[client] = true;
+		}
+	}
 
-    return Plugin_Continue;
+	return Plugin_Continue;
 }
 
 /**
  * Select a random backpack according to the player's permissions.
  */
-int RandomBackpackType(int client)
+int RandomBackpackType(int entity)
 {
-    int backpack_type = -1;
+	int backpack_type = -1;
 
-    int backpack_types = g_backpack_types.Length;
-    if (backpack_types > 0)
-    {
-        float non_admin_total_weight = 0.0;
-        float admin_only_total_weight = 0.0;
+	int max_backpacks = g_backpack_types.Length;
+	if (max_backpacks > 0)
+	{
+		float non_admin_total_weight = 0.0;
+		float admin_only_total_weight = 0.0;
+		float zombie_total_weight = 0.0;
 
-        // Dynamically normalize backpack weights because cvars can affect the
-        // weighting.
-        for (int i = 0; i < backpack_types; ++i)
-        {
-            float weight = view_as<float>(g_backpack_types.Get(i, BACKPACK_TYPE_WEIGHT));
-            if (weight > 0.0)
-            {
-                if (IsBackpackTypeAdminOnly(i))
-                {
-                    admin_only_total_weight += weight;
-                }
-                else
-                {
-                    non_admin_total_weight += weight;
-                }
-            }
-        }
+		// Dynamically normalize backpack weights because cvars can affect the
+		// weighting.
+		for (int i = 0; i < max_backpacks; ++i)
+		{
+			float weight = view_as<float>(g_backpack_types.Get(i, BACKPACK_TYPE_WEIGHT));
+			if (weight > 0.0)
+			{
+				if (IsBackpackTypeAdminOnly(i))
+				{
+					admin_only_total_weight += weight;
+				}
+				else
+				{
+					if (IsBackpackTypeZombie(i))
+					{
+						zombie_total_weight += weight;
+					}
+					non_admin_total_weight += weight;
+				}
+			}
+		}
 
-        // Only pick from admin-only backpacks if they exist
-        bool pick_admin = IsClientAdmin(client) && admin_only_total_weight > 0.0;
+		
+		bool pick_zombie = IsEntityZombie(entity);
 
-        float total_weight = pick_admin ? admin_only_total_weight : non_admin_total_weight;
-        if (total_weight <= 0.0)
-        {
-            total_weight = 1.0;
-        }
+		// Only pick from admin-only backpacks if they exist
+		bool pick_admin = !pick_zombie && IsEntityPlayer(entity) && IsClientAdmin(entity) && admin_only_total_weight > 0.0;
 
-        float roll = GetURandomFloat() * 100.0;
-        for (int i = 0; i < backpack_types && backpack_type == -1; ++i)
-        {
-            if (pick_admin != IsBackpackTypeAdminOnly(i))
-            {
-                continue;
-            }
+		float total_weight;
 
-            float weight = view_as<float>(g_backpack_types.Get(i, BACKPACK_TYPE_WEIGHT));
-            float chance = weight / total_weight * 100.0;
-            if (chance > 0.0)
-            {
-                if (roll < chance)
-                {
-                    backpack_type = i;
-                }
-                else
-                {
-                    roll -= chance;
-                }
-            }
-        }
-    }
+		if (pick_zombie)
+		{
+			total_weight = zombie_total_weight;
+		}
+		else
+		{
+			total_weight = pick_admin ? admin_only_total_weight : non_admin_total_weight;
+		}
 
-    return backpack_type;
+		if (total_weight <= 0.0)
+		{
+			total_weight = 1.0;
+		}
+
+		float roll = GetURandomFloat() * 100.0;
+		for (int i = 0; i < max_backpacks && backpack_type == -1; ++i)
+		{
+			if ((pick_zombie && !IsBackpackTypeZombie(i)) || pick_admin != IsBackpackTypeAdminOnly(i))
+				continue;
+
+			float weight = view_as<float>(g_backpack_types.Get(i, BACKPACK_TYPE_WEIGHT));
+			float chance = weight / total_weight * 100.0;
+			if (chance > 0.0)
+			{
+				if (roll < chance)
+				{
+					backpack_type = i;
+				}
+				else
+				{
+					roll -= chance;
+				}
+			}
+		}
+	}
+
+	return backpack_type;
+}
+
+bool IsEntityZombie(int entity)
+{
+	HasEntProp(entity, Prop_Send, "_headSplit");
 }
 
 /**
@@ -2493,72 +2633,81 @@ int RandomBackpackType(int client)
  */
 bool IsBackpackTypeAdminOnly(int backpack_type)
 {
-    bool admin_backpack = false;
+	bool admin_backpack = false;
 
-    if (backpack_type >= 0 && backpack_type < g_backpack_types.Length)
-    {
-        bool admin_cvar = g_cvar_backpack_only_admins_can_wear.BoolValue ||
-            g_cvar_backpack_only_admins_can_open.BoolValue;
+	if (backpack_type >= 0 && backpack_type < g_backpack_types.Length)
+	{
+		bool admin_cvar = g_cvar_backpack_only_admins_can_wear.BoolValue ||
+			g_cvar_backpack_only_admins_can_open.BoolValue;
 
-        eCvarFlag only_admins_wear = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_WEAR);
-        eCvarFlag only_admins_open = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_OPEN);
+		eCvarFlag only_admins_wear = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_WEAR);
+		eCvarFlag only_admins_open = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_OPEN);
 
-        admin_backpack = only_admins_wear == CVAR_FLAG_YES ||
-            only_admins_open == CVAR_FLAG_YES ||
-            ((only_admins_wear == CVAR_FLAG_DEFAULT || only_admins_open == CVAR_FLAG_DEFAULT) && admin_cvar);
-    }
+		admin_backpack = only_admins_wear == CVAR_FLAG_YES ||
+			only_admins_open == CVAR_FLAG_YES ||
+			((only_admins_wear == CVAR_FLAG_DEFAULT || only_admins_open == CVAR_FLAG_DEFAULT) && admin_cvar);
+	}
 
-    return admin_backpack;
+	return admin_backpack;
+}
+
+/**
+ * Return true if the backpack type identified by index is wearable by zombies
+ * Assumes a valid index is passed
+ */
+bool IsBackpackTypeZombie(int backpack_type)
+{
+	return g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ZOMBIES_WEAR);
 }
 
 int GetURandomIntInRange(int lo, int hi)
 {
-    if (hi < lo)
-    {
-        int swap = hi;
-        hi = lo;
-        lo = swap;
-    }
-    int mod = (hi + 1) - lo;
-    return mod == 0 ? lo : GetURandomInt() % mod + lo;
+	if (hi < lo)
+	{
+		int swap = hi;
+		hi = lo;
+		lo = swap;
+	}
+	int mod = (hi + 1) - lo;
+	return mod == 0 ? lo : GetURandomInt() % mod + lo;
 }
 
 int GetURandomIntInRangeWithSteps(int lo, int hi, int steps)
 {
-    if (hi < lo)
-    {
-        int swap = hi;
-        hi = lo;
-        lo = swap;
-    }
+	if (hi < lo)
+	{
+		int swap = hi;
+		hi = lo;
+		lo = swap;
+	}
 
-    int diff = (hi + 1) - lo;
+	int diff = (hi + 1) - lo;
 
-    return diff == 0 || steps <= 0 ? lo : lo + GetURandomIntInRange(0, steps) * (diff / steps);
+	return diff == 0 || steps <= 0 ? lo : lo + GetURandomIntInRange(0, steps) * (diff / steps);
 }
 
 void RandomBackpackColor(int color[3])
 {
-    int hsv[3];
+	int hsv[3];
 
-    int hue = g_next_backpack_hue;
+	int hue = g_next_backpack_hue;
 
-    // Try to skip green region (so backpack looks different from normal fema bag)
-    static const int green_start = 20;
-    static const int green_end = 60;
-    if (hue >= green_start && hue <= green_end)
-    {
-        hue += green_end + (hue - green_start);
-        hue %= 256;
-    }
+	// Try to skip green region (so backpack looks different from normal fema bag)
+	static const int green_start = 20;
+	static const int green_end = 60;
+	if (hue >= green_start && hue <= green_end)
+	{
+		hue += green_end + (hue - green_start);
+		hue %= 256;
+	}
 
-    g_next_backpack_hue = (hue + GetURandomIntInRange(30, 60)) % 256;
+	g_next_backpack_hue = (hue + GetURandomIntInRange(30, 60)) % 256;
 
-    hsv[HSV_H] = hue;
-    hsv[HSV_S] = GetURandomIntInRange(84, 185);
-    hsv[HSV_V] = GetURandomIntInRangeWithSteps(125, 175, 5);
+	hsv[HSV_H] = hue;
+	hsv[HSV_S] = GetURandomIntInRange(84, 185);
+	hsv[HSV_V] = GetURandomIntInRangeWithSteps(125, 175, 5);
 
-    HsvToRgb(hsv, color);
+	HsvToRgb(hsv, color);
 }
 
 /**
@@ -2566,71 +2715,71 @@ void RandomBackpackColor(int color[3])
  */
 void HsvToRgb(int hsv[3], int rgb[3])
 {
-    if (hsv[HSV_S] <= 0)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            rgb[i] = hsv[HSV_V];
-        }
-    }
-    else
-    {
-        float hh = float(hsv[HSV_H]) * (360.0 / 0xFF);
-        if (hh >= 360.0)
-        {
-            hh = 0.0;
-        }
-        hh /= 60.0;
+	if (hsv[HSV_S] <= 0)
+	{
+		for (int i = 0; i < 3; ++i)
+		{
+			rgb[i] = hsv[HSV_V];
+		}
+	}
+	else
+	{
+		float hh = float(hsv[HSV_H]) * (360.0 / 0xFF);
+		if (hh >= 360.0)
+		{
+			hh = 0.0;
+		}
+		hh /= 60.0;
 
-        // Normalize value and saturation to [0.0 - 1.0]
-        float vv = float(hsv[HSV_V]) / 0xFF;
-        float ss = float(hsv[HSV_S]) / 0xFF;
+		// Normalize value and saturation to [0.0 - 1.0]
+		float vv = float(hsv[HSV_V]) / 0xFF;
+		float ss = float(hsv[HSV_S]) / 0xFF;
 
-        int i = RoundToNearest(hh);
-        float ff = hh - float(i);
+		int i = RoundToNearest(hh);
+		float ff = hh - float(i);
 
-        int p = RoundToNearest((vv * (1.0 - ss)) * 255.0);
-        int q = RoundToNearest((vv * (1.0 - (ss * ff))) * 255.0);
-        int t = RoundToNearest((vv * (1.0 - (ss * (1.0 - ff)))) * 255.0);
-        int v = hsv[HSV_V];
+		int p = RoundToNearest((vv * (1.0 - ss)) * 255.0);
+		int q = RoundToNearest((vv * (1.0 - (ss * ff))) * 255.0);
+		int t = RoundToNearest((vv * (1.0 - (ss * (1.0 - ff)))) * 255.0);
+		int v = hsv[HSV_V];
 
-        if (i == 0)
-        {
-            rgb[R] = v;
-            rgb[G] = t;
-            rgb[B] = p;
-        }
-        else if (i == 1)
-        {
-            rgb[R] = q;
-            rgb[G] = v;
-            rgb[B] = p;
-        }
-        else if (i == 2)
-        {
-            rgb[R] = p;
-            rgb[G] = v;
-            rgb[B] = t;
-        }
-        else if (i == 3)
-        {
-            rgb[R] = p;
-            rgb[G] = q;
-            rgb[B] = v;
-        }
-        else if (i == 4)
-        {
-            rgb[R] = t;
-            rgb[G] = p;
-            rgb[B] = v;
-        }
-        else
-        {
-            rgb[R] = v;
-            rgb[G] = p;
-            rgb[B] = q;
-        }
-    }
+		if (i == 0)
+		{
+			rgb[R] = v;
+			rgb[G] = t;
+			rgb[B] = p;
+		}
+		else if (i == 1)
+		{
+			rgb[R] = q;
+			rgb[G] = v;
+			rgb[B] = p;
+		}
+		else if (i == 2)
+		{
+			rgb[R] = p;
+			rgb[G] = v;
+			rgb[B] = t;
+		}
+		else if (i == 3)
+		{
+			rgb[R] = p;
+			rgb[G] = q;
+			rgb[B] = v;
+		}
+		else if (i == 4)
+		{
+			rgb[R] = t;
+			rgb[G] = p;
+			rgb[B] = v;
+		}
+		else
+		{
+			rgb[R] = v;
+			rgb[G] = p;
+			rgb[B] = q;
+		}
+	}
 }
 
 /**
@@ -2638,125 +2787,146 @@ void HsvToRgb(int hsv[3], int rgb[3])
  */
 public Action OnSupplyChancesModifyBox(int box)
 {
-    int box_ref = EntIndexToEntRef(box);
-    bool is_backpack = g_backpacks.FindValue(box_ref, BACKPACK_ITEM_BOX) != -1;
-    return is_backpack ? Plugin_Stop : Plugin_Continue;
+	int box_ref = EntIndexToEntRef(box);
+	bool is_backpack = g_backpacks.FindValue(box_ref, BACKPACK_ITEM_BOX) != -1;
+	return is_backpack ? Plugin_Stop : Plugin_Continue;
 }
 
 /**
  * Create a backpack that players can pick up by punching.
  */
-int CreateBackpack(const float pos[3], const float angles[3], int backpack_type)
+int CreateBackpack(int backpack_type)
 {
-    if (backpack_type < 0 || backpack_type >= g_backpack_types.Length)
-    {
-        return -1;
-    }
+	if (backpack_type < 0 || backpack_type >= g_backpack_types.Length)
+		return -1;
 
-    int backpack = CreateEntityByName("item_inventory_box");
-    int ornament = CreateEntityByName("prop_dynamic_ornament");
+	int backpack = CreateEntityByName("item_inventory_box");
+	int ornament = CreateEntityByName("prop_dynamic_ornament");
 
-    if (backpack != -1 && ornament != -1)
-    {
-        int tuple[BACKPACK_TUPLE_SIZE];
-        tuple[BACKPACK_ITEM_BOX] = EntIndexToEntRef(backpack);
-        tuple[BACKPACK_ORNAMENT] = EntIndexToEntRef(ornament);
-        tuple[BACKPACK_TYPE] = backpack_type;
-        g_backpacks.PushArray(tuple);
+	if (backpack != -1 && ornament != -1)
+	{
+		int tuple[BACKPACK_TUPLE_SIZE];
+		tuple[BACKPACK_ITEM_BOX] = EntIndexToEntRef(backpack);
+		tuple[BACKPACK_ORNAMENT] = EntIndexToEntRef(ornament);
+		tuple[BACKPACK_TYPE] = backpack_type;
+		g_backpacks.PushArray(tuple);
 
-        char targetname[32];
-        Format(targetname, sizeof(targetname), "%s-%d",
-            BACKPACK_ITEMBOX_TARGETNAME, backpack);
+		char targetname[32];
+		Format(targetname, sizeof(targetname), "%s-%d",
+			BACKPACK_ITEMBOX_TARGETNAME, backpack);
 
-        char model[PLATFORM_MAX_PATH];
+		char model[PLATFORM_MAX_PATH];
 
-        // Setup item box to use custom model.
-        g_backpack_type_itembox_models.GetString(backpack_type, model, sizeof(model));
-        DispatchKeyValue(backpack, "targetname", targetname);
-        DispatchKeyValueVector(backpack, "origin", pos);
-        DispatchKeyValueVector(backpack, "angles", angles);
-        DispatchKeyValue(backpack, "model", model);
-        DispatchSpawn(backpack);
+		// Setup item box to use custom model.
+		g_backpack_type_itembox_models.GetString(backpack_type, model, sizeof(model));
+		DispatchKeyValue(backpack, "targetname", targetname);
+		DispatchKeyValue(backpack, "model", model);
+		DispatchSpawn(backpack);
 
-        // Setup ornament to use custom model.
-        g_backpack_type_ornament_models.GetString(backpack_type, model, sizeof(model));
-        DispatchKeyValueVector(ornament, "origin", pos);
-        DispatchKeyValue(ornament, "model", model);
-        DispatchKeyValue(ornament, "disableshadows", "1");
-        DispatchSpawn(ornament);
+		// Setup ornament to use custom model.
+		g_backpack_type_ornament_models.GetString(backpack_type, model, sizeof(model));
+		DispatchKeyValue(ornament, "model", model);
+		DispatchKeyValue(ornament, "disableshadows", "1");
+		DispatchSpawn(ornament);
 
 
-        int color[3] = { 0, 255, 0 };
+		int color[3] = { 0, 255, 0 };
 
-        eCvarFlag colorize = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_COLORIZE);
-        if (colorize == CVAR_FLAG_YES || (colorize == CVAR_FLAG_DEFAULT && g_cvar_backpack_colorize.BoolValue))
-        {
-            RandomBackpackColor(color);
+		eCvarFlag colorize = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_COLORIZE);
+		if (colorize == CVAR_FLAG_YES || (colorize == CVAR_FLAG_DEFAULT && g_cvar_backpack_colorize.BoolValue))
+		{
+			RandomBackpackColor(color);
 
-            SetEntityRenderMode(backpack, RENDER_TRANSCOLOR);
-            SetEntityRenderColor(backpack, color[0], color[1], color[2], 0xFF);
+			SetEntityRenderMode(backpack, RENDER_TRANSCOLOR);
+			SetEntityRenderColor(backpack, color[0], color[1], color[2], 0xFF);
 
-            SetEntityRenderMode(ornament, RENDER_TRANSCOLOR);
-            SetEntityRenderColor(ornament, color[0], color[1], color[2], 0xFF);
-        }
+			SetEntityRenderMode(ornament, RENDER_TRANSCOLOR);
+			SetEntityRenderColor(ornament, color[0], color[1], color[2], 0xFF);
+		}
 
-        // Set backpack to glow on demand.
-        Format(model, sizeof(model), "%d %d %d", color[0], color[1], color[2]);
-        DispatchKeyValue(backpack, "glowable", "1");
-        DispatchKeyValueFloat(backpack, "glowdistance", g_cvar_backpack_glow_dist.FloatValue); 
-        DispatchKeyValue(backpack, "glowcolor", model);
+		// Set backpack to glow on demand.
+		Format(model, sizeof(model), "%d %d %d", color[0], color[1], color[2]);
+		DispatchKeyValue(backpack, "glowable", "1");
+		DispatchKeyValueFloat(backpack, "glowdistance", g_cvar_backpack_glow_dist.FloatValue); 
+		DispatchKeyValue(backpack, "glowcolor", model);
 
-        if (g_cvar_backpack_glow_blip.BoolValue)
-            DispatchKeyValue(backpack, "glowblip", "1"); 
+		if (g_cvar_backpack_glow_blip.BoolValue)
+			DispatchKeyValue(backpack, "glowblip", "1"); 
 
-        if (g_cvar_backpack_glow.BoolValue)
-            RequestFrame(Frame_EnableGlow, EntIndexToEntRef(backpack));
+		ToggleHighlight(backpack, true);
 
-        SDKCall(g_sdkcall_baseentity_set_collision_group, backpack, COLLISION_GROUP_DEBRIS);
+		SDKCall(g_sdkcall_baseentity_set_collision_group, backpack, COLLISION_GROUP_DEBRIS);
 
-        int ammos[ITEMBOX_MAX_SLOTS] = { 0, ... };
-        g_backpack_clips.PushArray(ammos);
-        g_backpack_gear_clips.PushArray(ammos); // Intentional truncation.
-        g_backpack_ammos.PushArray(ammos);
+		int ammos[ITEMBOX_MAX_SLOTS] = { 0, ... };
+		g_backpack_clips.PushArray(ammos);
+		g_backpack_gear_clips.PushArray(ammos); // Intentional truncation.
+		g_backpack_ammos.PushArray(ammos);
 
-        // Make backpack a trigger that detects debris (weapons & ammo).
-        int solid_flags = GetEntProp(backpack, Prop_Send, "m_usSolidFlags");
-        solid_flags |= FSOLID_TRIGGER | FSOLID_TRIGGER_TOUCH_DEBRIS;
-        SetEntProp(backpack, Prop_Send, "m_usSolidFlags", solid_flags);
+		// Make backpack a trigger that detects debris (weapons & ammo).
+		int solid_flags = GetEntProp(backpack, Prop_Send, "m_usSolidFlags");
+		solid_flags |= FSOLID_TRIGGER | FSOLID_TRIGGER_TOUCH_DEBRIS;
+		SetEntProp(backpack, Prop_Send, "m_usSolidFlags", solid_flags);
 
-        SDKHook(backpack, SDKHook_Use, Hook_BackpackUse);
-        SDKHook(backpack, SDKHook_StartTouch, Hook_BackpackStartTouch);
-        SDKHook(backpack, SDKHook_OnTakeDamage, Hook_BackpackPickup);
+		SDKHook(backpack, SDKHook_Use, Hook_BackpackUse);
+		SDKHook(backpack, SDKHook_StartTouch, Hook_BackpackStartTouch);
+		SDKHook(backpack, SDKHook_OnTakeDamage, Hook_BackpackPickup);
 
-        // Increment item count once to prevent box removing itself when empty.
-        int item_count = GetEntData(backpack, g_offset_itembox_item_count, SIZEOF_INT);
-        SetEntData(backpack, g_offset_itembox_item_count, item_count + 1, SIZEOF_INT);
+		// Increment item count once to prevent box removing itself when empty.
+		int item_count = GetEntData(backpack, g_offset_itembox_item_count, SIZEOF_INT);
+		SetEntData(backpack, g_offset_itembox_item_count, item_count + 1, SIZEOF_INT);
 
-        // Clear the inventory box of initial loot.
-        InventoryBox_Clear(backpack);
-    }
+		// Clear the inventory box of initial loot.
+		InventoryBox_Clear(backpack);
+	}
 
-    return backpack;
+	return backpack;
+}
+
+void ToggleHighlight(int backpack, bool value)
+{
+	if (value)
+	{
+		switch (g_cvar_backpack_glow_type.IntValue)
+		{
+		case HIGHLIGHT_GLOW:
+			RequestFrame(Frame_EnableGlow, EntIndexToEntRef(backpack));
+		
+		case HIGHLIGHT_BLINK:
+			BlinkEntity(backpack);
+		}	
+	}
+	else
+	{
+		switch (g_cvar_backpack_glow_type.IntValue)
+		{
+		case HIGHLIGHT_GLOW:
+			RequestFrame(Frame_DisableGlow, EntIndexToEntRef(backpack));
+		case HIGHLIGHT_BLINK:
+			UnblinkEntity(backpack);
+		}	
+	}
 }
 
 void Frame_EnableGlow(int backpack_ref)
 {
-    int backpack = EntRefToEntIndex(backpack_ref);
-    if (backpack != -1)
-        AcceptEntityInput(backpack, "EnableGlow", backpack, backpack);
+	int backpack = EntRefToEntIndex(backpack_ref);
+	if (backpack != -1)
+	{
+		AcceptEntityInput(backpack, "EnableGlow", backpack, backpack);
+	}
 }
 
 void Frame_DisableGlow(int backpack_ref)
 {
-    int backpack = EntRefToEntIndex(backpack_ref);
-    if (backpack != -1)
-        AcceptEntityInput(backpack, "DisableGlow", backpack, backpack);
+	int backpack = EntRefToEntIndex(backpack_ref);
+	if (backpack != -1)
+		AcceptEntityInput(backpack, "DisableGlow", backpack, backpack);
 }
 
 void InventoryBox_Clear(int box)
 {
-    for (int i; i < ITEMBOX_TOTAL_SLOTS; i++)
-        SetEntData(box, g_offset_itembox_weapon_array + i * 4, 0);
+	for (int i; i < ITEMBOX_TOTAL_SLOTS; i++)
+		SetEntData(box, g_offset_itembox_weapon_array + i * 4, 0);
 }
 
 /**
@@ -2765,16 +2935,17 @@ void InventoryBox_Clear(int box)
  */
 int TraceAndCreateBackpack(int client, int backpack_type)
 {
-    int backpack = -1;
+	int backpack = -1;
 
-    float pos[3];
-    float angles[3];
-    if (TraceBackpackPosition(client, pos, angles))
-    {
-        backpack = CreateBackpack(pos, angles, backpack_type);
-    }
+	float pos[3];
+	float angles[3];
+	if (TraceBackpackPosition(client, pos, angles))
+	{
+		backpack = CreateBackpack(backpack_type);
+		TeleportEntity(backpack, pos, angles);
+	}
 
-    return backpack;
+	return backpack;
 }
 
 /**
@@ -2783,26 +2954,26 @@ int TraceAndCreateBackpack(int client, int backpack_type)
  * Play sound effect when backpack is opened.
  */
 public Action Hook_BackpackUse(
-    int backpack,
-    int activator,
-    int caller,
-    UseType type,
-    float value)
+	int backpack,
+	int activator,
+	int caller,
+	UseType type,
+	float value)
 {
-    float distance_squared = GetEntDistance(backpack, activator, SQUARED_DISTANCE, true);
-    bool allow = distance_squared <= BACKPACK_MAX_USE_DISTANCE_SQUARED &&
-        CanPlayerOpenBackpackInstance(activator, backpack);
+	float distance_squared = GetEntDistance(backpack, activator, SQUARED_DISTANCE, true);
+	bool allow = distance_squared <= BACKPACK_MAX_USE_DISTANCE_SQUARED &&
+		CanPlayerOpenBackpackInstance(activator, backpack);
 
-    if (allow)
-    {
-        int backpack_ref = EntIndexToEntRef(backpack);
-        int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+	if (allow)
+	{
+		int backpack_ref = EntIndexToEntRef(backpack);
+		int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
 
-        static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
-        PlayBackpackSound(backpack, backpack_index, BACKPACK_TYPE_OPEN_SOUNDS, previous);
-    }
+		static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
+		PlayBackpackSound(backpack, backpack_index, BACKPACK_TYPE_OPEN_SOUNDS, previous);
+	}
 
-    return allow ? Plugin_Continue : Plugin_Handled;
+	return allow ? Plugin_Continue : Plugin_Handled;
 }
 
 /**
@@ -2811,20 +2982,20 @@ public Action Hook_BackpackUse(
  */
 void InventoryBox_RemoveItem(int box, eInventoryBoxCategory type, int index)
 {
-    switch (type)
-    {
-        case INVENTORY_BOX_CATEGORY_WEAPON:
-            if (index <= 7) 
-                SetEntData(box, g_offset_itembox_weapon_array + index * 4, 0);
+	switch (type)
+	{
+	case INVENTORY_BOX_CATEGORY_WEAPON:
+		if (index <= 7) 
+			SetEntData(box, g_offset_itembox_weapon_array + index * 4, 0);
 
-        case INVENTORY_BOX_CATEGORY_GEAR:
-            if (index <= 3)
-                SetEntData(box, g_offset_itembox_gear_array + index * 4 , 0);
+	case INVENTORY_BOX_CATEGORY_GEAR:
+		if (index <= 3)
+			SetEntData(box, g_offset_itembox_gear_array + index * 4 , 0);
 
-        case INVENTORY_BOX_CATEGORY_AMMO:
-            if (index <= 7)
-                SetEntData(box, g_offset_itembox_ammo_array + index * 4, 0);
-    }
+	case INVENTORY_BOX_CATEGORY_AMMO:
+		if (index <= 7)
+			SetEntData(box, g_offset_itembox_ammo_array + index * 4, 0);
+	}
 }
 
 /**
@@ -2832,38 +3003,38 @@ void InventoryBox_RemoveItem(int box, eInventoryBoxCategory type, int index)
  */
 public void Hook_BackpackStartTouch(int backpack, int other)
 {
-    int backpack_ref = EntIndexToEntRef(backpack);
-    int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+	int backpack_ref = EntIndexToEntRef(backpack);
+	int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
 
-    bool play_sound = false;
-    bool remove = false;
+	bool play_sound = false;
+	bool remove = false;
 
-    char classname[CLASSNAME_MAX];
-    if (IsClassnameEqual(other, classname, sizeof(classname), ITEM_AMMO_BOX))
-    {
-        int ammo_amount = GetEntProp(other, Prop_Data, "m_iAmmoCount");
-        int added = AddAmmoBoxToBackpack(backpack, backpack_index, other);
+	char classname[CLASSNAME_MAX];
+	if (IsClassnameEqual(other, classname, sizeof(classname), ITEM_AMMO_BOX))
+	{
+		int ammo_amount = GetEntProp(other, Prop_Data, "m_iAmmoCount");
+		int added = AddAmmoBoxToBackpack(backpack, backpack_index, other);
 
-        play_sound = added > 0;
-        remove = added == ammo_amount;
-    }
-    else if (SDKCall(g_sdkcall_entity_is_combat_weapon, other) &&
-        AddWeaponToBackpack(backpack, backpack_index, other))
-    {
-        play_sound = true;
-        remove = true;
-    }
+		play_sound = added > 0;
+		remove = added == ammo_amount;
+	}
+	else if (IsEntityWeapon(other) &&
+		AddWeaponToBackpack(backpack, backpack_index, other))
+	{
+		play_sound = true;
+		remove = true;
+	}
 
-    if (play_sound)
-    {
-        static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
-        PlayBackpackSound(backpack, backpack_index, BACKPACK_TYPE_ADD_SOUNDS, previous);
-    }
+	if (play_sound)
+	{
+		static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
+		PlayBackpackSound(backpack, backpack_index, BACKPACK_TYPE_ADD_SOUNDS, previous);
+	}
 
-    if (remove)
-    {
-        AcceptEntityInput(other, "Kill");
-    }
+	if (remove)
+	{
+		AcceptEntityInput(other, "Kill");
+	}
 }
 
 /**
@@ -2878,68 +3049,68 @@ public void Hook_BackpackStartTouch(int backpack, int other)
  */
 bool AddWeaponToBackpack(int backpack, int backpack_index, int weapon_entity)
 {
-    bool added = false;
+	bool added = false;
 
-    char classname[CLASSNAME_MAX];
-    GetEntityClassname(weapon_entity, classname, sizeof(classname));
+	char classname[CLASSNAME_MAX];
+	GetEntityClassname(weapon_entity, classname, sizeof(classname));
 
-    int weapon_id = -1;
-    int category = -1;
+	int weapon_id = -1;
+	int category = -1;
 
-    if (backpack_index != -1 &&
-        GetWeaponByName(classname, weapon_id, category))
-    {
-        int max_slots = ITEMBOX_MAX_SLOTS;
-        int base_offset = g_offset_itembox_weapon_array;
-        ArrayList clips = g_backpack_clips;
+	if (backpack_index != -1 &&
+		GetWeaponByName(classname, weapon_id, category))
+	{
+		int max_slots = ITEMBOX_MAX_SLOTS;
+		int base_offset = g_offset_itembox_weapon_array;
+		ArrayList clips = g_backpack_clips;
 
-        if (category == view_as<int>(INVENTORY_BOX_CATEGORY_GEAR))
-        {
-            max_slots = ITEMBOX_MAX_GEAR;
-            base_offset = g_offset_itembox_gear_array;
-            clips = g_backpack_gear_clips;
+		if (category == view_as<int>(INVENTORY_BOX_CATEGORY_GEAR))
+		{
+			max_slots = ITEMBOX_MAX_GEAR;
+			base_offset = g_offset_itembox_gear_array;
+			clips = g_backpack_gear_clips;
 
-            // Add tool_barricade because it will be inserted into 'gear' category.
-            strcopy(classname, sizeof(classname), "tool_barricade");
-        }
-        else
-        {
-            // Add fa_glock17 because it will be inserted into 'weapon' category.
-            strcopy(classname, sizeof(classname), "fa_glock17");
-        }
+			// Add tool_barricade because it will be inserted into 'gear' category.
+			strcopy(classname, sizeof(classname), "tool_barricade");
+		}
+		else
+		{
+			// Add fa_glock17 because it will be inserted into 'weapon' category.
+			strcopy(classname, sizeof(classname), "fa_glock17");
+		}
 
-        int empty_slot = -1;
+		int empty_slot = -1;
 
-        for (int i = 0; i < max_slots && empty_slot == -1; ++i)
-        {
-            int offset = base_offset + SIZEOF_INT * i;
-            int id = GetEntData(backpack, offset, SIZEOF_INT);
+		for (int i = 0; i < max_slots && empty_slot == -1; ++i)
+		{
+			int offset = base_offset + SIZEOF_INT * i;
+			int id = GetEntData(backpack, offset, SIZEOF_INT);
 
-            if (id == 0)
-            {
-                empty_slot = i;
-            }
-        }
+			if (id == 0)
+			{
+				empty_slot = i;
+			}
+		}
 
-        if (empty_slot != -1)
-        {
-            SDKCall(g_sdkcall_itembox_add_item, backpack, classname);
+		if (empty_slot != -1)
+		{
+			SDKCall(g_sdkcall_itembox_add_item, backpack, classname);
 
-            // Assign actual item ID to slot (this fixes the tool_barricade/fa_glock17 above.
-            SetEntData(backpack, base_offset + empty_slot * SIZEOF_INT, weapon_id);
+			// Assign actual item ID to slot (this fixes the tool_barricade/fa_glock17 above.
+			SetEntData(backpack, base_offset + empty_slot * SIZEOF_INT, weapon_id);
 
-            int ammo_amount = -1;
-            if (HasEntProp(weapon_entity, Prop_Data, "m_iClip1"))
-            {
-                ammo_amount = GetEntProp(weapon_entity, Prop_Data, "m_iClip1");
-            }
-            clips.Set(backpack_index, ammo_amount, empty_slot);
-    
-            added = true;
-        }
-    }
+			int ammo_amount = -1;
+			if (HasEntProp(weapon_entity, Prop_Data, "m_iClip1"))
+			{
+				ammo_amount = GetEntProp(weapon_entity, Prop_Data, "m_iClip1");
+			}
+			clips.Set(backpack_index, ammo_amount, empty_slot);
+	
+			added = true;
+		}
+	}
 
-    return added;
+	return added;
 }
 
 /**
@@ -2954,94 +3125,94 @@ bool AddWeaponToBackpack(int backpack, int backpack_index, int weapon_entity)
  */
 int AddAmmoBoxToBackpack(int backpack, int backpack_index, int ammo_box)
 {
-    int added = 0;
+	int added = 0;
 
-    char ammo_name[80];
-    int weapon_id = -1;
-    int category = -1;
+	char ammo_name[80];
+	int weapon_id = -1;
+	int category = -1;
 
-    if (backpack_index != -1 &&
-        GetAmmoByEnt(ammo_box, weapon_id, category, ammo_name, sizeof(ammo_name)))
-    {
-        int empty_slot = -1;
-        int matching_slot = -1;
+	if (backpack_index != -1 &&
+		GetAmmoByEnt(ammo_box, weapon_id, category, ammo_name, sizeof(ammo_name)))
+	{
+		int empty_slot = -1;
+		int matching_slot = -1;
 
-        int max_stored = INT_MAX;
-        int max_stacks = g_cvar_backpack_ammo_stack_limit.IntValue;
-        if (max_stacks > 0)
-        {
-            max_stored = SDKCall(g_sdkcall_ammobox_get_max_ammo, ammo_box) * max_stacks;
-        }
+		int max_stored = INT_MAX;
+		int max_stacks = g_cvar_backpack_ammo_stack_limit.IntValue;
+		if (max_stacks > 0)
+		{
+			max_stored = SDKCall(g_sdkcall_ammobox_get_max_ammo, ammo_box) * max_stacks;
+		}
 
-        // Locate first empty slot and non-full slot of matching type.
-        for (int i = 0; i < ITEMBOX_MAX_SLOTS && (empty_slot == -1 || matching_slot == -1); ++i)
-        {
-            int offset = g_offset_itembox_ammo_array + SIZEOF_INT * i;
-            int id = GetEntData(backpack, offset, SIZEOF_INT);
+		// Locate first empty slot and non-full slot of matching type.
+		for (int i = 0; i < ITEMBOX_MAX_SLOTS && (empty_slot == -1 || matching_slot == -1); ++i)
+		{
+			int offset = g_offset_itembox_ammo_array + SIZEOF_INT * i;
+			int id = GetEntData(backpack, offset, SIZEOF_INT);
 
-            if (id == 0 && empty_slot == -1)
-            {
-                empty_slot = i;
-            }
-            else if (id == weapon_id && matching_slot == -1 &&
-                g_backpack_ammos.Get(backpack_index, i) < max_stored)
-            {
-                matching_slot = i;
-            }
-        }
+			if (id == 0 && empty_slot == -1)
+			{
+				empty_slot = i;
+			}
+			else if (id == weapon_id && matching_slot == -1 &&
+				g_backpack_ammos.Get(backpack_index, i) < max_stored)
+			{
+				matching_slot = i;
+			}
+		}
 
-        int ammo_amount = GetEntProp(ammo_box, Prop_Data, "m_iAmmoCount");
+		int ammo_amount = GetEntProp(ammo_box, Prop_Data, "m_iAmmoCount");
 
-        // Prefer adding to existing spot.
-        if (matching_slot != -1)
-        {
-            int stored_before = g_backpack_ammos.Get(backpack_index, matching_slot);
-            int stored_after = stored_before + ammo_amount;
-            bool overflowed = false;
+		// Prefer adding to existing spot.
+		if (matching_slot != -1)
+		{
+			int stored_before = g_backpack_ammos.Get(backpack_index, matching_slot);
+			int stored_after = stored_before + ammo_amount;
+			bool overflowed = false;
 
-            if (stored_after < stored_before)
-            {
-                // Int overflow.
-                added = max_stored - stored_before;
-                ammo_amount -= added;
-                stored_after = max_stored;
-                SetEntProp(ammo_box, Prop_Data, "m_iAmmoCount", ammo_amount);
-                overflowed = true;
-            }
-            else if (stored_after > max_stored)
-            {
-                // Maxed out ammo slot.
-                added = ammo_amount - (stored_after - max_stored);
-                ammo_amount = stored_after - max_stored;
-                stored_after = max_stored;
-                SetEntProp(ammo_box, Prop_Data, "m_iAmmoCount", ammo_amount);
-                overflowed = true;
-            }
-            else
-            {
-                added = ammo_amount;
-                ammo_amount = 0;
-            }
-            g_backpack_ammos.Set(backpack_index, stored_after, matching_slot);
+			if (stored_after < stored_before)
+			{
+				// Int overflow.
+				added = max_stored - stored_before;
+				ammo_amount -= added;
+				stored_after = max_stored;
+				SetEntProp(ammo_box, Prop_Data, "m_iAmmoCount", ammo_amount);
+				overflowed = true;
+			}
+			else if (stored_after > max_stored)
+			{
+				// Maxed out ammo slot.
+				added = ammo_amount - (stored_after - max_stored);
+				ammo_amount = stored_after - max_stored;
+				stored_after = max_stored;
+				SetEntProp(ammo_box, Prop_Data, "m_iAmmoCount", ammo_amount);
+				overflowed = true;
+			}
+			else
+			{
+				added = ammo_amount;
+				ammo_amount = 0;
+			}
+			g_backpack_ammos.Set(backpack_index, stored_after, matching_slot);
 
-            if (overflowed && ammo_amount > 0)
-            {
-                // Recurse.
-                added += AddAmmoBoxToBackpack(backpack, backpack_index, ammo_box);
-            }
-        }
-        else if (empty_slot != -1)
-        {
-            SDKCall(g_sdkcall_itembox_add_item, backpack, ammo_name);
-            g_backpack_ammos.Set(backpack_index, ammo_amount, empty_slot);
-            added = ammo_amount;
+			if (overflowed && ammo_amount > 0)
+			{
+				// Recurse.
+				added += AddAmmoBoxToBackpack(backpack, backpack_index, ammo_box);
+			}
+		}
+		else if (empty_slot != -1)
+		{
+			SDKCall(g_sdkcall_itembox_add_item, backpack, ammo_name);
+			g_backpack_ammos.Set(backpack_index, ammo_amount, empty_slot);
+			added = ammo_amount;
 
-            // Try to update box!
-            ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_AMMO, -1);
-        }
-    }
+			// Try to update box!
+			ItemBoxItemTaken(INVENTORY_BOX_CATEGORY_AMMO, -1);
+		}
+	}
 
-    return added;
+	return added;
 }
 
 /**
@@ -3049,30 +3220,42 @@ int AddAmmoBoxToBackpack(int backpack, int backpack_index, int ammo_box)
  * equipped and then drop their backpack.
  */
 public Action OnPlayerRunCmd(
-    int client,
-    int &buttons,
-    int &impulse,
-    float vel[3],
-    float angles[3],
-    int &weapon,
-    int &subtype,
-    int &cmdnum,
-    int &tickcount,
-    int &seed,
-    int mouse[2])
+	int client,
+	int &buttons,
+	int &impulse,
+	float vel[3],
+	float angles[3],
+	int &weapon,
+	int &subtype,
+	int &cmdnum,
+	int &tickcount,
+	int &seed,
+	int mouse[2])
 {
-    if ((buttons & IN_DROPWEAPON) &&
-        g_player_fists_equipped[client] &&
-        EntRefToEntIndex(g_player_backpacks[client]) != INVALID_ENT_REFERENCE)
-    {
-        int fists = GetClientActiveWeapon(client);
-        if (HasEntProp(fists, Prop_Send, "m_flNextPrimaryAttack") &&
-            GetGameTime() >= GetEntPropFloat(fists, Prop_Send, "m_flNextPrimaryAttack"))
-        {
-            DropBackpack(client);
-        }
-    }
-    return Plugin_Continue;
+	if ((buttons & IN_DROPWEAPON) &&
+		g_player_fists_equipped[client] &&
+		EntRefToEntIndex(g_character_backpacks[client]) != INVALID_ENT_REFERENCE)
+	{
+		int fists = GetClientActiveWeapon(client);
+		if (HasEntProp(fists, Prop_Send, "m_flNextPrimaryAttack") &&
+			GetGameTime() >= GetEntPropFloat(fists, Prop_Send, "m_flNextPrimaryAttack"))
+		{
+			DropBackpack(client);
+		}
+	}
+	return Plugin_Continue;
+}
+
+Action Event_NPCKilled(Event event, const char[] name, bool dontBroadcast)
+{
+	int killed_index = event.GetInt("entidx");
+	DropBackpack(killed_index);
+	return Plugin_Continue;
+}
+
+bool IsZombieCrawler(int zombie)
+{
+	return view_as<bool>(GetEntData(zombie, g_offset_zombie_iscrawler, 1));
 }
 
 /**
@@ -3081,56 +3264,71 @@ public Action OnPlayerRunCmd(
  * @param client        Player doing pick up.
  * @param backpack      Backpack entity.
  */
-void PickupBackpack(int client, int backpack)
+void PickupBackpack(int entity, int backpack)
 {
-    if (EntRefToEntIndex(g_player_backpacks[client]) == INVALID_ENT_REFERENCE)
-    {
-        bool held = false;
+	bool isPlayer = IsEntityPlayer(entity);
 
-        // Make sure no one else is holding the backpack.
-        int backpack_ref = EntIndexToEntRef(backpack);
-        for (int i = 1; i <= MaxClients && !held; ++i)
-        {
-            if (g_player_backpacks[i] == backpack_ref)
-            {
-                held = true;
-            }
-        }
+	if (isPlayer && !CanPlayerWearBackpackInstance(entity, backpack))
+	{
+		PrintToChat(entity, "%t", "@backpack-can-only-wear-one");
+	}
 
-        if (!held)
-        {
-            int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-            if (backpack_index != -1 && CanPlayerWearBackpackInstance(client, backpack))
-            {
-                // Attach the backpack ornament to the player.
-                int ornament = EntRefToEntIndex(g_backpacks.Get(backpack_index, BACKPACK_ORNAMENT));
-                if (ornament != INVALID_ENT_REFERENCE)
-                {
-                    SetVariantString("!activator");
-                    AcceptEntityInput(ornament, "SetAttached", client, client);
-                }
+	if (EntRefToEntIndex(g_character_backpacks[entity]) == INVALID_ENT_REFERENCE)
+	{
+		bool held = false;
 
-                static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
-                PlayBackpackSound(client, backpack_index, BACKPACK_TYPE_WEAR_SOUNDS, previous);
+		// Make sure no one else is holding the backpack.
+		int backpack_ref = EntIndexToEntRef(backpack);
+		for (int i = 1; i < sizeof(g_character_backpacks) && !held; ++i)
+		{
+			if (g_character_backpacks[i] == backpack_ref)
+			{
+				held = true;
+			}
+		}
 
-                // Stop players from taking items once the backpack is worn.
-                if (g_sdkcall_itembox_end_use_for_all_players)
-                {
-                    SDKCall(g_sdkcall_itembox_end_use_for_all_players, backpack);
-                }
+		if (!held)
+		{
+			int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+			if (backpack_index != -1)
+			{
+				// Attach the backpack ornament to the character.
+				int ornament = EntRefToEntIndex(g_backpacks.Get(backpack_index, BACKPACK_ORNAMENT));
+				if (ornament != INVALID_ENT_REFERENCE)
+				{
+					SetVariantString("!activator");
+					AcceptEntityInput(ornament, "SetAttached", entity, entity);
+				}
 
-                // Stop glowing backpack.
-                RequestFrame(Frame_DisableGlow, EntIndexToEntRef(backpack));
+				static int previous[SHUFFLE_SOUND_COUNT] = { -1, ... };
 
-                HideEntity(backpack);
-                g_player_backpacks[client] = backpack_ref;
-            }
-        }
-    }
-    else
-    {
-        PrintToChat(client, "%T", "@backpack-can-only-wear-one", client);
-    }
+				if (isPlayer)
+					PlayBackpackSound(entity, backpack_index, BACKPACK_TYPE_WEAR_SOUNDS, previous);
+
+				// Stop players from taking items once the backpack is worn.
+				if (g_sdkcall_itembox_end_use_for_all_players)
+				{
+					SDKCall(g_sdkcall_itembox_end_use_for_all_players, backpack);
+				}
+
+				ToggleHighlight(backpack_index, false);
+				HideEntity(backpack);
+				g_character_backpacks[entity] = backpack_ref;
+			}
+		}
+	}
+}
+
+void BlinkEntity(int entity)
+{
+	int effects = GetEntProp(entity, Prop_Send, "m_fEffects");
+	SetEntProp(entity, Prop_Send, "m_fEffects", effects|EF_ITEM_BLINK);
+}
+
+void UnblinkEntity(int entity)
+{
+	int effects = GetEntProp(entity, Prop_Send, "m_fEffects");
+	SetEntProp(entity, Prop_Send, "m_fEffects", effects & ~EF_ITEM_BLINK);
 }
 
 /**
@@ -3138,7 +3336,21 @@ void PickupBackpack(int client, int backpack)
  */
 bool IsClientAdmin(int client)
 {
-    return CheckCommandAccess(client, "backpack_admin", ADMFLAG_BACKPACK);
+	return CheckCommandAccess(client, "backpack_admin", ADMFLAG_BACKPACK);
+}
+
+
+/**
+ * Check if this zombie model is allowed to wear a backpack.
+ */
+bool CanZombieWearBackpack(int zombie)
+{
+	char model[PLATFORM_MAX_PATH];
+	GetEntPropString(zombie, Prop_Data, "m_ModelName", model, sizeof(model));
+	
+	int val;
+	bool result = g_backpack_npcs.GetValue(model, val);
+	return result;
 }
 
 /**
@@ -3146,8 +3358,8 @@ bool IsClientAdmin(int client)
  */
 bool CanPlayerWearBackpack(int client)
 {
-    return IsClientInGame(client) &&
-        (g_cvar_backpack_only_admins_can_wear.BoolValue ? IsClientAdmin(client) : !IsFakeClient(client));
+	return IsClientInGame(client) &&
+		(g_cvar_backpack_only_admins_can_wear.BoolValue ? IsClientAdmin(client) : !IsFakeClient(client));
 }
 
 /**
@@ -3155,33 +3367,33 @@ bool CanPlayerWearBackpack(int client)
  */
 bool CanPlayerWearBackpackInstance(int client, int backpack)
 {
-    bool can_wear = false;
+	bool can_wear = false;
 
-    if (IsClientInGame(client) && !IsFakeClient(client))
-    {
-        int backpack_ref = EntIndexToEntRef(backpack);
-        int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-        if (backpack_index != -1)
-        {
-            int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
-            eCvarFlag admins_only = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_WEAR);
+	if (IsClientInGame(client) && !IsFakeClient(client))
+	{
+		int backpack_ref = EntIndexToEntRef(backpack);
+		int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+		if (backpack_index != -1)
+		{
+			int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
+			eCvarFlag admins_only = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_WEAR);
 
-            if (admins_only == CVAR_FLAG_DEFAULT)
-            {
-                can_wear = CanPlayerWearBackpack(client);
-            }
-            else if (admins_only == CVAR_FLAG_YES)
-            {
-                can_wear = IsClientAdmin(client);
-            }
-            else
-            {
-                can_wear = true;
-            }
-        }
-    }
+			if (admins_only == CVAR_FLAG_DEFAULT)
+			{
+				can_wear = CanPlayerWearBackpack(client);
+			}
+			else if (admins_only == CVAR_FLAG_YES)
+			{
+				can_wear = IsClientAdmin(client);
+			}
+			else
+			{
+				can_wear = true;
+			}
+		}
+	}
 
-    return can_wear;
+	return can_wear;
 }
 
 /**
@@ -3189,8 +3401,8 @@ bool CanPlayerWearBackpackInstance(int client, int backpack)
  */
 bool CanPlayerOpenBackpack(int client)
 {
-    return IsClientInGame(client) &&
-        (g_cvar_backpack_only_admins_can_open.BoolValue ? IsClientAdmin(client) : !IsFakeClient(client));
+	return IsClientInGame(client) &&
+		(g_cvar_backpack_only_admins_can_open.BoolValue ? IsClientAdmin(client) : !IsFakeClient(client));
 }
 
 /**
@@ -3198,33 +3410,33 @@ bool CanPlayerOpenBackpack(int client)
  */
 bool CanPlayerOpenBackpackInstance(int client, int backpack)
 {
-    bool can_open = false;
+	bool can_open = false;
 
-    if (IsClientInGame(client) && !IsFakeClient(client))
-    {
-        int backpack_ref = EntIndexToEntRef(backpack);
-        int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
-        if (backpack_index != -1)
-        {
-            int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
-            eCvarFlag admins_only = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_OPEN);
+	if (IsClientInGame(client) && !IsFakeClient(client))
+	{
+		int backpack_ref = EntIndexToEntRef(backpack);
+		int backpack_index = g_backpacks.FindValue(backpack_ref, BACKPACK_ITEM_BOX);
+		if (backpack_index != -1)
+		{
+			int backpack_type = g_backpacks.Get(backpack_index, BACKPACK_TYPE);
+			eCvarFlag admins_only = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ONLY_ADMINS_OPEN);
 
-            if (admins_only == CVAR_FLAG_DEFAULT)
-            {
-                can_open = CanPlayerOpenBackpack(client);
-            }
-            else if (admins_only == CVAR_FLAG_YES)
-            {
-                can_open = IsClientAdmin(client);
-            }
-            else
-            {
-                can_open = true;
-            }
-        }
-    }
+			if (admins_only == CVAR_FLAG_DEFAULT)
+			{
+				can_open = CanPlayerOpenBackpack(client);
+			}
+			else if (admins_only == CVAR_FLAG_YES)
+			{
+				can_open = IsClientAdmin(client);
+			}
+			else
+			{
+				can_open = true;
+			}
+		}
+	}
 
-    return can_open;
+	return can_open;
 }
 
 /**
@@ -3233,24 +3445,24 @@ bool CanPlayerOpenBackpackInstance(int client, int backpack)
  * Place the punched backpack on the player's back.
  */
 public Action Hook_BackpackPickup(
-    int backpack,
-    int &attacker,
-    int &inflictor,
-    float &damage,
-    int &damage_type)
+	int backpack,
+	int &attacker,
+	int &inflictor,
+	float &damage,
+	int &damage_type)
 {
-    char weapon_name[CLASSNAME_MAX];
+	char weapon_name[CLASSNAME_MAX];
 
-    if (attacker > 0 &&
-        attacker <= MaxClients &&
-        CanPlayerWearBackpackInstance(attacker, backpack) &&
-        g_player_fists_equipped[attacker] &&
-        IsClassnameEqual(inflictor, weapon_name, sizeof(weapon_name), ME_FISTS))
-    {
-        PickupBackpack(attacker, backpack);
-    }
+	if (attacker > 0 &&
+		attacker <= MaxClients &&
+		CanPlayerWearBackpackInstance(attacker, backpack) &&
+		g_player_fists_equipped[attacker] &&
+		IsClassnameEqual(inflictor, weapon_name, sizeof(weapon_name), ME_FISTS))
+	{
+		PickupBackpack(attacker, backpack);
+	}
 
-    return Plugin_Continue;
+	return Plugin_Continue;
 }
 
 /**
@@ -3258,9 +3470,9 @@ public Action Hook_BackpackPickup(
  */
 void HideEntity(int entity)
 {
-    float out_of_bounds[3] = { 16383.0, ... };
-    TeleportEntity(entity, out_of_bounds, NULL_VECTOR, NULL_VECTOR);
-    AcceptEntityInput(entity, "DisableMotion");
+	float out_of_bounds[3] = { 32000.0, ... };
+	TeleportEntity(entity, out_of_bounds, NULL_VECTOR, NULL_VECTOR);
+	AcceptEntityInput(entity, "DisableMotion");
 }
 
 /**
@@ -3274,32 +3486,32 @@ void HideEntity(int entity)
  */
 bool CreateBackpackItemFor(int client, const char[] classname, int clip)
 {
-    int item = CreateEntityByName(classname);
-    if (item != -1)
-    {
-        g_new_backpack_item_ref = EntIndexToEntRef(item);
-        g_new_backpack_item_clip = clip;
-        g_new_backpack_item_user_id = GetClientUserId(client);
-        g_new_backpack_item_owner_has_room = false;
+	int item = CreateEntityByName(classname);
+	if (item != -1)
+	{
+		g_new_backpack_item_ref = EntIndexToEntRef(item);
+		g_new_backpack_item_clip = clip;
+		g_new_backpack_item_user_id = GetClientUserId(client);
+		g_new_backpack_item_owner_has_room = false;
 
-        SDKHook(item, SDKHook_SpawnPost, Hook_BackpackItemSpawned);
+		SDKHook(item, SDKHook_SpawnPost, Hook_BackpackItemSpawned);
 
-        float origin[3];
-        GetClientEyePosition(client, origin);
-        DispatchKeyValueVector(item, "origin", origin);
+		float origin[3];
+		GetClientEyePosition(client, origin);
+		DispatchKeyValueVector(item, "origin", origin);
 
-        if (DispatchSpawn(item) && g_new_backpack_item_owner_has_room)
-        {
-            AcceptEntityInput(item, "Use", client, client);
-        }
-        else
-        {
-            // Keep item in backpack if player has no room for it.
-            AcceptEntityInput(item, "Kill");
-            item = -1;
-        }
-    }
-    return item != -1;
+		if (DispatchSpawn(item) && g_new_backpack_item_owner_has_room)
+		{
+			AcceptEntityInput(item, "Use", client, client);
+		}
+		else
+		{
+			// Keep item in backpack if player has no room for it.
+			AcceptEntityInput(item, "Kill");
+			item = -1;
+		}
+	}
+	return item != -1;
 }
 
 /**
@@ -3307,36 +3519,36 @@ bool CreateBackpackItemFor(int client, const char[] classname, int clip)
  */
 public void Hook_BackpackItemSpawned(int weapon)
 {
-    if (weapon == EntRefToEntIndex(g_new_backpack_item_ref))
-    {
-        int clip = g_new_backpack_item_clip;
-        if (clip != -1 && HasEntProp(weapon, Prop_Send, "m_iClip1"))
-        {
-            SetEntProp(weapon, Prop_Send, "m_iClip1", clip);
-        }
+	if (weapon == EntRefToEntIndex(g_new_backpack_item_ref))
+	{
+		int clip = g_new_backpack_item_clip;
+		if (clip != -1 && HasEntProp(weapon, Prop_Send, "m_iClip1"))
+		{
+			SetEntProp(weapon, Prop_Send, "m_iClip1", clip);
+		}
 
-        int client = GetClientOfUserId(g_new_backpack_item_user_id);
-        if (client != 0 &&
-            IsClientInGame(client) &&
-            IsPlayerAlive(client) &&
-            SDKCall(g_sdkcall_entity_is_combat_weapon, weapon))
-        {
-            int current_weight = GetClientCarryWeight(client);
-            int max_weight = g_inv_maxcarry.IntValue;
-            int weapon_weight = SDKCall(g_sdkcall_weapon_get_weight, weapon);
+		int client = GetClientOfUserId(g_new_backpack_item_user_id);
+		if (client != 0 &&
+			IsClientInGame(client) &&
+			IsPlayerAlive(client) &&
+			IsEntityWeapon(weapon))
+		{
+			int current_weight = GetClientCarryWeight(client);
+			int max_weight = g_inv_maxcarry.IntValue;
+			int weapon_weight = SDKCall(g_sdkcall_weapon_get_weight, weapon);
 
-            bool has_room = (max_weight - current_weight) >= weapon_weight;
+			bool has_room = (max_weight - current_weight) >= weapon_weight;
 
-            g_new_backpack_item_owner_has_room = has_room;
-        }
-    }
+			g_new_backpack_item_owner_has_room = has_room;
+		}
+	}
 }
 
 int GetClientCarryWeight(int client)
 {
-    int ammo_weight = SDKCall(g_sdkcall_player_get_ammo_weight, client);
-    int weapon_weight = GetEntProp(client, Prop_Send, "_carriedWeight");
-    return ammo_weight + weapon_weight;
+	int ammo_weight = SDKCall(g_sdkcall_player_get_ammo_weight, client);
+	int weapon_weight = GetEntProp(client, Prop_Send, "_carriedWeight");
+	return ammo_weight + weapon_weight;
 }
 
 /**
@@ -3354,45 +3566,45 @@ int GetClientCarryWeight(int client)
  */
 int CreateBackpackAmmoFor(int client, const char[] ammo_type, int &stored)
 {
-    int ammo_box = -1;
-    if (stored > 0)
-    {
-        ammo_box = CreateEntityByName(ITEM_AMMO_BOX);
-        if (ammo_box != -1)
-        {
-            // Assign ammuntion type.
-            SDKCall(g_sdkcall_ammobox_set_ammo_type, ammo_box, ammo_type);
+	int ammo_box = -1;
+	if (stored > 0)
+	{
+		ammo_box = CreateEntityByName(ITEM_AMMO_BOX);
+		if (ammo_box != -1)
+		{
+			// Assign ammuntion type.
+			SDKCall(g_sdkcall_ammobox_set_ammo_type, ammo_box, ammo_type);
 
-            // Assign ammo count.
-            int max_ammo = SDKCall(g_sdkcall_ammobox_get_max_ammo, ammo_box);
-            int rounds = stored > max_ammo ? max_ammo : stored;
-            SDKCall(g_sdkcall_ammobox_set_ammo_count, ammo_box, rounds);
-            stored -= rounds;
+			// Assign ammo count.
+			int max_ammo = SDKCall(g_sdkcall_ammobox_get_max_ammo, ammo_box);
+			int rounds = stored > max_ammo ? max_ammo : stored;
+			SDKCall(g_sdkcall_ammobox_set_ammo_count, ammo_box, rounds);
+			stored -= rounds;
 
-            float origin[3];
-            GetClientEyePosition(client, origin);
-            DispatchKeyValueVector(ammo_box, "origin", origin);
+			float origin[3];
+			GetClientEyePosition(client, origin);
+			DispatchKeyValueVector(ammo_box, "origin", origin);
 
-            if (DispatchSpawn(ammo_box))
-            {
-                AcceptEntityInput(ammo_box, "Use", client, client);
+			if (DispatchSpawn(ammo_box))
+			{
+				AcceptEntityInput(ammo_box, "Use", client, client);
 
-                if ((GetEntProp(ammo_box, Prop_Data, "m_iEFlags") & EFL_NO_THINK_FUNCTION))
-                {
-                    // Put leftovers back in backpack.
-                    stored += GetEntProp(ammo_box, Prop_Data, "m_iAmmoCount");
-                    RemoveEdict(ammo_box);
-                    ammo_box = -1;
-                }
-            }
-            else
-            {
-                RemoveEdict(ammo_box);
-                ammo_box = -1;
-            }
-        }
-    }
-    return ammo_box;
+				if ((GetEntProp(ammo_box, Prop_Data, "m_iEFlags") & EFL_NO_THINK_FUNCTION))
+				{
+					// Put leftovers back in backpack.
+					stored += GetEntProp(ammo_box, Prop_Data, "m_iAmmoCount");
+					RemoveEdict(ammo_box);
+					ammo_box = -1;
+				}
+			}
+			else
+			{
+				RemoveEdict(ammo_box);
+				ammo_box = -1;
+			}
+		}
+	}
+	return ammo_box;
 }
 
 /**
@@ -3400,19 +3612,19 @@ int CreateBackpackAmmoFor(int client, const char[] ammo_type, int &stored)
  */
 public bool Trace_IgnoreAll(int entity, int contents_mask)
 {
-    return entity == 0;
+	return entity == 0;
 }
 
 stock int TracePlayerView(int client, TraceEntityFilter filter)
 {
-    float start[3];
-    GetClientEyePosition(client, start);
+	float start[3];
+	GetClientEyePosition(client, start);
 
-    float angles[3];
-    GetClientEyeAngles(client, angles);
+	float angles[3];
+	GetClientEyeAngles(client, angles);
 
-    TR_TraceRayFilter(start, angles, MASK_SOLID, RayType_Infinite, filter, client);
-    return TR_GetEntityIndex();
+	TR_TraceRayFilter(start, angles, MASK_SOLID, RayType_Infinite, filter, client);
+	return TR_GetEntityIndex();
 }
 
 /**
@@ -3420,11 +3632,11 @@ stock int TracePlayerView(int client, TraceEntityFilter filter)
  */
 stock bool NMRiH_IsPlayerAlive(int client)
 {
-    bool alive = false;
-    if (client > 0 && client <= MaxClients && IsClientInGame(client))
-        alive = GetEntProp(client, Prop_Send, "m_iPlayerState") == STATE_ACTIVE;
-    
-    return alive;
+	bool alive = false;
+	if (client > 0 && client <= MaxClients && IsClientInGame(client))
+		alive = GetEntProp(client, Prop_Send, "m_iPlayerState") == STATE_ACTIVE;
+	
+	return alive;
 }
 
 /**
@@ -3432,13 +3644,13 @@ stock bool NMRiH_IsPlayerAlive(int client)
  */
 Handle DHookCreateFromConfOrFail(Handle gameconf, const char[] key)
 {
-    Handle result = DHookCreateFromConf(gameconf, key);
-    if (!result)
-    {
-        CloseHandle(gameconf);
-        SetFailState("Failed to create DHook for %s", key);
-    }
-    return result;
+	Handle result = DHookCreateFromConf(gameconf, key);
+	if (!result)
+	{
+		CloseHandle(gameconf);
+		SetFailState("Failed to create DHook for %s", key);
+	}
+	return result;
 }
 
 /**
@@ -3446,13 +3658,13 @@ Handle DHookCreateFromConfOrFail(Handle gameconf, const char[] key)
  */
 int GameConfGetOffsetOrFail(Handle gameconf, const char[] key)
 {
-    int offset = GameConfGetOffset(gameconf, key);
-    if (offset == -1)
-    {
-        CloseHandle(gameconf);
-        SetFailState("Failed to read gamedata offset of %s", key);
-    }
-    return offset;
+	int offset = GameConfGetOffset(gameconf, key);
+	if (offset == -1)
+	{
+		CloseHandle(gameconf);
+		SetFailState("Failed to read gamedata offset of %s", key);
+	}
+	return offset;
 }
 
 /**
@@ -3460,11 +3672,11 @@ int GameConfGetOffsetOrFail(Handle gameconf, const char[] key)
  */
 void GameConfPrepSDKCallSignatureOrFail(Handle gameconf, const char[] key)
 {
-    if (!PrepSDKCall_SetFromConf(gameconf, SDKConf_Signature, key))
-    {
-        CloseHandle(gameconf);
-        SetFailState("Failed to retrieve signature for gamedata key %s", key);
-    }
+	if (!PrepSDKCall_SetFromConf(gameconf, SDKConf_Signature, key))
+	{
+		CloseHandle(gameconf);
+		SetFailState("Failed to retrieve signature for gamedata key %s", key);
+	}
 }
 
 /**
@@ -3472,8 +3684,8 @@ void GameConfPrepSDKCallSignatureOrFail(Handle gameconf, const char[] key)
  */
 stock bool IsClassnameEqual(int entity, char[] classname, int classname_size, const char[] compare_to)
 {
-    GetEntityClassname(entity, classname, classname_size);
-    return StrEqual(classname, compare_to);
+	GetEntityClassname(entity, classname, classname_size);
+	return StrEqual(classname, compare_to);
 }
 
 /**
@@ -3481,7 +3693,7 @@ stock bool IsClassnameEqual(int entity, char[] classname, int classname_size, co
  */
 stock int GetEntOwner(int entity)
 {
-    return GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity");
+	return GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity");
 }
 
 /**
@@ -3489,7 +3701,7 @@ stock int GetEntOwner(int entity)
  */
 stock int GetClientActiveWeapon(int client)
 {
-    return GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+	return GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
 }
 
 /**
@@ -3503,7 +3715,7 @@ stock int GetClientActiveWeapon(int client)
  */
 stock int GetEntTargetname(int entity, char[] targetname, int buffer_size)
 {
-    return GetEntPropString(entity, Prop_Data, "m_iName", targetname, buffer_size);
+	return GetEntPropString(entity, Prop_Data, "m_iName", targetname, buffer_size);
 }
 
 /**
@@ -3514,7 +3726,7 @@ stock int GetEntTargetname(int entity, char[] targetname, int buffer_size)
  */
 stock void SetEntTargetname(int entity, const char[] targetname)
 {
-    SetEntPropString(entity, Prop_Data, "m_iName", targetname);
+	SetEntPropString(entity, Prop_Data, "m_iName", targetname);
 }
 
 /**
@@ -3526,7 +3738,7 @@ stock void SetEntTargetname(int entity, const char[] targetname)
  */
 stock int GetEntHealth(int entity)
 {
-    return GetEntProp(entity, Prop_Data, "m_iHealth");
+	return GetEntProp(entity, Prop_Data, "m_iHealth");
 }
 
 /**
@@ -3538,7 +3750,7 @@ stock int GetEntHealth(int entity)
  */
 stock int GetEntMaxHealth(int entity)
 {
-    return GetEntProp(entity, Prop_Data, "m_iMaxHealth");
+	return GetEntProp(entity, Prop_Data, "m_iMaxHealth");
 }
 
 /**
@@ -3549,8 +3761,8 @@ stock int GetEntMaxHealth(int entity)
  */
 stock void GetEntOrigin(int entity, float origin[3])
 {
-    //GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
-    GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
+	//GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
+	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
 }
 
 /**
@@ -3558,7 +3770,7 @@ stock void GetEntOrigin(int entity, float origin[3])
  */
 stock void GetEntRotation(int entity, float angles[3])
 {
-    GetEntPropVector(entity, Prop_Data, "m_angAbsRotation", angles);
+	GetEntPropVector(entity, Prop_Data, "m_angAbsRotation", angles);
 }
 
 /**
@@ -3566,9 +3778,9 @@ stock void GetEntRotation(int entity, float angles[3])
  */
 stock void CopyVector(const float source[3], float dest[3])
 {
-    dest[X] = source[X];
-    dest[Y] = source[Y];
-    dest[Z] = source[Z];
+	dest[X] = source[X];
+	dest[Y] = source[Y];
+	dest[Z] = source[Z];
 }
 
 /**
@@ -3576,9 +3788,9 @@ stock void CopyVector(const float source[3], float dest[3])
  */
 stock void AssignVector(float x, float y, float z, float dest[3])
 {
-    dest[X] = x;
-    dest[Y] = y;
-    dest[Z] = z;
+	dest[X] = x;
+	dest[Y] = y;
+	dest[Z] = z;
 }
 
 /**
@@ -3586,18 +3798,18 @@ stock void AssignVector(float x, float y, float z, float dest[3])
  */
 stock float GetEntDistance(int ent_a, int ent_b, bool squared = false, bool horizontal_only = false)
 {
-    float pos_a[3];
-    GetEntOrigin(ent_a, pos_a);
+	float pos_a[3];
+	GetEntOrigin(ent_a, pos_a);
 
-    float pos_b[3];
-    GetEntOrigin(ent_b, pos_b);
+	float pos_b[3];
+	GetEntOrigin(ent_b, pos_b);
 
-    if (horizontal_only)
-    {
-        pos_b[Z] = pos_a[Z];
-    }
+	if (horizontal_only)
+	{
+		pos_b[Z] = pos_a[Z];
+	}
 
-    return GetVectorDistance(pos_a, pos_b, squared);
+	return GetVectorDistance(pos_a, pos_b, squared);
 }
 
 /**
@@ -3605,44 +3817,44 @@ stock float GetEntDistance(int ent_a, int ent_b, bool squared = false, bool hori
  */
 stock int ShuffleSoundIndex(int count, int previous[SHUFFLE_SOUND_COUNT])
 {
-    int sound_index = -1;
+	int sound_index = -1;
 
-    if (count > SHUFFLE_SOUND_COUNT)
-    {
-        static const int MAX_ATTEMPTS = 3;
-        for (int i = 0; i < MAX_ATTEMPTS; ++i)
-        {
-            int random_index = GetURandomInt() % count;
-            for (int j = 0; j < SHUFFLE_SOUND_COUNT; ++j)
-            {
-                if (random_index == previous[j])
-                {
-                    random_index = -1;
-                    break;
-                }
-            }
+	if (count > SHUFFLE_SOUND_COUNT)
+	{
+		static const int MAX_ATTEMPTS = 3;
+		for (int i = 0; i < MAX_ATTEMPTS; ++i)
+		{
+			int random_index = GetURandomInt() % count;
+			for (int j = 0; j < SHUFFLE_SOUND_COUNT; ++j)
+			{
+				if (random_index == previous[j])
+				{
+					random_index = -1;
+					break;
+				}
+			}
 
-            if (random_index != -1)
-            {
-                sound_index = random_index;
-                break;
-            }
-        }
-    }
+			if (random_index != -1)
+			{
+				sound_index = random_index;
+				break;
+			}
+		}
+	}
 
-    if (sound_index == -1)
-    {
-        sound_index = (previous[SHUFFLE_SOUND_COUNT - 1] + 1) % count;
-    }
+	if (sound_index == -1)
+	{
+		sound_index = (previous[SHUFFLE_SOUND_COUNT - 1] + 1) % count;
+	}
 
-    for (int i = 0; i < SHUFFLE_SOUND_COUNT - 1; ++i)
-    {
-        previous[i] = previous[i + 1];
-    }
-    previous[SHUFFLE_SOUND_COUNT - 1] = sound_index;
+	for (int i = 0; i < SHUFFLE_SOUND_COUNT - 1; ++i)
+	{
+		previous[i] = previous[i + 1];
+	}
+	previous[SHUFFLE_SOUND_COUNT - 1] = sound_index;
 
 
-    return sound_index;
+	return sound_index;
 }
 
 /**
@@ -3651,16 +3863,16 @@ stock int ShuffleSoundIndex(int count, int previous[SHUFFLE_SOUND_COUNT])
  */
 stock void RemoveArrayListElement(ArrayList &list, int index)
 {
-    if (list && index >= 0 && index < list.Length)
-    {
-        int last = 0;
-        if (list.Length > 1)
-        {
-            last = list.Length - 1;
-            list.SwapAt(index, last);
-        }
-        list.Erase(last);
-    }
+	if (list && index >= 0 && index < list.Length)
+	{
+		int last = 0;
+		if (list.Length > 1)
+		{
+			last = list.Length - 1;
+			list.SwapAt(index, last);
+		}
+		list.Erase(last);
+	}
 }
 
 /**
@@ -3668,5 +3880,5 @@ stock void RemoveArrayListElement(ArrayList &list, int index)
  */
 stock ArrayList TupleGetArrayList(int[] tuple, int index)
 {
-    return view_as<ArrayList>(tuple[index]);
+	return view_as<ArrayList>(tuple[index]);
 }
