@@ -17,7 +17,7 @@
 
 public Plugin myinfo =
 {
-	name = "[NMRiH] Backpack (Dysphie's fork)",
+	name = "[NMRiH] Backpack (Dysphie's Fork)",
 	author = "Ryan.",
 	description = "Portable inventory box.",
 	version = BACKPACK_VERSION,
