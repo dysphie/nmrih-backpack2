@@ -2256,7 +2256,7 @@ bool DropBackpack(int owner, int target = 0)
 		PlayBackpackSound(owner, backpack_index, BACKPACK_TYPE_DROP_SOUNDS, previous);
 
 		// Make backpack glow again
-		ToggleHighlight(backpack_index, true);
+		ToggleHighlight(backpack, true);
 
 		ResetCarrier(owner);
 
@@ -2657,7 +2657,9 @@ bool IsBackpackTypeAdminOnly(int backpack_type)
  */
 bool IsBackpackTypeZombie(int backpack_type)
 {
-	return g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ZOMBIES_WEAR);
+	int result = g_backpack_types.Get(backpack_type, BACKPACK_TYPE_ZOMBIES_WEAR);
+	PrintToServer("IsBackpackTypeZombie %d", result);
+	return !!result;
 }
 
 int GetURandomIntInRange(int lo, int hi)
@@ -3311,7 +3313,7 @@ void PickupBackpack(int entity, int backpack)
 					SDKCall(g_sdkcall_itembox_end_use_for_all_players, backpack);
 				}
 
-				ToggleHighlight(backpack_index, false);
+				ToggleHighlight(backpack, false);
 				HideEntity(backpack);
 				g_character_backpacks[entity] = backpack_ref;
 			}
