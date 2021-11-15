@@ -38,11 +38,11 @@ These features are currently unavailable, though I plan on adding them
 
 - `sm_backpack_zombie_weapon_max` `[0-8]` - Maximum gear items to spawn in backpacks carried by zombies
 
-- `sm_backpack_show_hints` `0/1` - Show screen hints about backpack usage
+- `sm_backpack_count` - Number of backpacks to give out on round restart. Won't create more backpacks than there are players.
 
 - `sm_backpack_ammo_stack_limit` - Number of ammo boxes of a type that can be stored per ammo slot.
-
-- `sm_backpack_count` - Number of backpacks to give out on round restart. Won't create more backpacks than there are players.
+ 
+- `sm_backpack_show_hints` `0/1` - Show screen hints about backpack usage
 
 - `sm_backpack_colorize` - Randomly colorize backpacks to help distinguish them.
 
@@ -53,3 +53,9 @@ These features are currently unavailable, though I plan on adding them
 - `sm_backpack_glow_distance` - Distance at which glowing backpacks stop glowing, if applicable
 
 - `sm_backpack_zombie_chance` `[0.0-1.0]` - Chance for a zombie to spawn with a backpack. 0 means never, 1.0 means 100%. For reference, crawler chance is 0.02
+
+## Backpack template options
+
+- 
+
+
