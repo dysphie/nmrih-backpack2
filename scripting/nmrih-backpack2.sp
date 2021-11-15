@@ -1130,7 +1130,7 @@ void OnAmmoBoxSpawned(int ammobox)
 	
 	stopThinkTime[ammobox] = GetTickedTime() + 1.5;
 	// CheckAmmoBoxCollide(ammobox); // crashing in 1.12.0
-	CreateTimer(0.1, OnAmmoFallThink, EntIndexToEntRef(ammobox), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(0.0, OnAmmoFallThink, EntIndexToEntRef(ammobox), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
 void OnWeaponDropped(int client, int weapon)
@@ -1141,7 +1141,7 @@ void OnWeaponDropped(int client, int weapon)
 
 	stopThinkTime[weapon] = GetTickedTime() + 1.5;
 	// CheckWeaponCollide(weapon); // crashing in 1.12.0
-	CreateTimer(0.1, OnWeaponFallThink, EntIndexToEntRef(weapon), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(0.0, OnWeaponFallThink, EntIndexToEntRef(weapon), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
 Action OnAmmoFallThink(Handle timer, int ammoRef)
