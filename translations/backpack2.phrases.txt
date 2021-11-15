@@ -1,0 +1,48 @@
+"Phrases"
+{
+	"Backpack Settings"
+	{
+		"en"	"Backpack Settings"
+	}
+	"Hints Enabled"
+	{
+		"en"	"Show Hints: ENABLED"
+	}
+
+	"Hints Disabled"
+	{
+		"en"	"Show Hints: DISABLED"
+	}	
+
+	"Hint You Can Drop"
+	{
+		"en"	"[G] Drop Backpack"
+	}
+
+	"Hint You Can Pick Up"
+	{
+		"en"	"[PUNCH] Equip backpack\n\n[E] Open backpack"
+	}
+
+	"Give Backpack Success"
+	{
+		"#format" "{1:N}"
+		"en" "Gave {1} a backpack"
+	}
+
+	"Give Backpack Already Owns"
+	{
+		"#format" "{1:N}"
+		"en" "{1} already owns a backpack"
+	}
+
+	"Already Own This Type"
+	{
+		"en" "Already own an item of this type!"
+	}
+
+	"No Inventory Space"
+	{
+		"en" "Not enough room for this item!"
+	}
+}
