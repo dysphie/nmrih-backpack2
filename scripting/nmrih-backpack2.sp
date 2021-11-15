@@ -920,7 +920,7 @@ public Action Cmd_Backpack(int client, int args)
 
 	if (wearingBackpack[target])
 	{
-		ReplyToCommand(client, "%t", "Give Backpack Already Owns", target);
+		ReplyToCommand(client, PLUGIN_PREFIX ... "%t", "Give Backpack Already Owns", target);
 		return Plugin_Handled;
 	}
 
@@ -929,7 +929,7 @@ public Action Cmd_Backpack(int client, int args)
 	bp.Attach(target);
 	backpacks.PushArray(bp);
 
-	ReplyToCommand(client, "%t", "Give Backpack Success", target);
+	ReplyToCommand(client, PLUGIN_PREFIX ... "%t", "Give Backpack Success", target);
 	return Plugin_Handled;
 }
 
@@ -1807,7 +1807,7 @@ bool DropFromEntity(int entity, int backpack)
 		// drop location.
 		if (!TraceBackpackPosition(entity, origin, angles))
 		{
-			PrintToChat(entity, PLUGIN_PREFIX ... "%t", "Invalid drop position");
+			PrintToChat(entity, PLUGIN_PREFIX ... "%t", "Invalid Drop Position");
 			return false;
 		}  
 	}
