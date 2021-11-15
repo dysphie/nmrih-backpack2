@@ -1,6 +1,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clientprefs>
+
 #include <vscript_proxy>
 
 #pragma semicolon 1
@@ -10,6 +11,7 @@
 // FIXME: Zombies can drop weapons at 0 0 0 when they receive a backpack
 // FIXME: Sanity checks everywhere!
 // TODO: Ensure players can't get stuck in the supply crate interface
+// TODO: Glow backpacks when obj items are added to them, and restore targetnames
 
 #define PLUGIN_PREFIX "[Backpack2] "
 
@@ -53,16 +55,9 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie",
 	description = "Portable inventory boxes",
-	version     = "0.0.1willexplode",
+	version     = "2.0.0",
 	url         = ""
 };
-
-enum
-{
-	CFG_DEF = -1,
-	CFG_NO,
-	CFG_YES
-}
 
 bool optimize;
 
@@ -85,16 +80,14 @@ ConVar cvGearLootMax;
 ConVar cvWeaponLootMin;
 ConVar cvWeaponLootMax;
 
+ConVar inv_maxcarry = null;
+
 Cookie hintCookie;
 
 ArrayList templates = null;
 ArrayList backpacks = null;
 
-ConVar sv_zombie_crawler_health = null;
-ConVar inv_maxcarry = null;
-
 StringMap itemLookup = null;
-
 ArrayList itemRegistry = null;
 
 bool wasLookingAtBackpack[MAXPLAYERS_NMRIH+1] = {false, ...};
@@ -106,7 +99,7 @@ float stopThinkTime[MAXENTITIES+1] = {-1.0, ...};
 bool used[MAXENTITIES+1] = { false, ...};
 
 int MaxEntities = 0;
-int numDroppedBackpacks = 0; // FIXME: Prolly desync atm
+int numDroppedBackpacks = 0;
 
 enum struct BackpackSound
 {
@@ -183,7 +176,6 @@ enum struct Backpack
 
 	int color[3];			// Unique color to distinguish from other backpacks (tint and glow)
 
-	// FIXME: Always selecting the same id?
 	void Init(int templateID)
 	{
 		StoredItem blank;
@@ -442,8 +434,7 @@ enum struct Backpack
 			return false;
 		}
 
-		// fixme
-		//FreezePlayer(client);
+		FreezePlayer(client);
 		this.PlaySound(SoundOpen);
 
 		Handle msg = StartMessageOne("ItemBoxOpen", client, USERMSG_RELIABLE|USERMSG_BLOCKHOOKS);
@@ -496,6 +487,7 @@ enum struct Backpack
 
 	void EndUse(int client)
 	{
+		UnfreezePlayer(client);
 		this.atInterface[client] = false;
 		UserMsg_EndUse(client);
 	}
@@ -782,12 +774,14 @@ public void OnPluginStart()
 	LoadTranslations("backpack2.phrases");
 	LoadTranslations("common.phrases");
 
-	hintCookie = new Cookie("backpack_hints", "Disable Backpack2 hints", CookieAccess_Public);
+	hintCookie = new Cookie("backpack2_hints", "Toggles Backpack2 screen hints", CookieAccess_Protected);
 
 	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("player_death", OnPlayerDeath);
 	HookEvent("player_extracted", OnPlayerExtracted);
 	HookEvent("nmrih_reset_map", Event_MapReset);
+	HookEvent("game_restarting", OnGameRestarting, EventHookMode_PostNoCopy);
+	HookEvent("npc_killed", OnNPCKilled);
 
 	RegConsoleCmd("dropbackpack", Cmd_DropBackpack);
 	MaxEntities = GetMaxEntities();
@@ -798,14 +792,29 @@ public void OnPluginStart()
 			MAXENTITIES, MaxEntities);
 	}
 
-	cvAmmoLootMin = CreateConVar("sm_backpack_zombie_ammo_min", "0", "");
-	cvAmmoLootMax = CreateConVar("sm_backpack_zombie_ammo_max", "4", "");
-	cvAmmoLootMinPct = CreateConVar("sm_backpack_zombie_ammo_min_pct", "30", "");
-	cvAmmoLootMaxPct = CreateConVar("sm_backpack_zombie_ammo_max_pct", "100", "");
-	cvGearLootMin = CreateConVar("sm_backpack_zombie_gear_min", "0", "");
-	cvGearLootMax = CreateConVar("sm_backpack_zombie_gear_max", "1", "");
-	cvWeaponLootMin = CreateConVar("sm_backpack_zombie_weapon_min", "0", "");
-	cvWeaponLootMax = CreateConVar("sm_backpack_zombie_weapon_max", "2", "");
+	cvAmmoLootMin = CreateConVar("sm_backpack_loot_ammo_min", "0", 
+		"Minimum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
+
+	cvAmmoLootMax = CreateConVar("sm_backpack_loot_ammo_max", "4", 
+		"Maximum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
+
+	cvAmmoLootMinPct = CreateConVar("sm_backpack_loot_ammo_min_pct", "40", 
+		"Minimum fill percentage for ammo boxes spawned as backpack loot", _, true, 1.0);
+
+	cvAmmoLootMaxPct = CreateConVar("sm_backpack_loot_ammo_max_pct", "100", 
+		"Maximum fill percentage for ammo boxes spawned as backpack loot", _, true, 1.0);
+
+	cvGearLootMin = CreateConVar("sm_backpack_loot_gear_min", "0", 
+		"Minimum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
+
+	cvGearLootMax = CreateConVar("sm_backpack_loot_gear_max", "1", 
+		"Maximum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
+
+	cvWeaponLootMin = CreateConVar("sm_backpack_loot_weapon_min", "0", 
+		"Minimum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
+
+	cvWeaponLootMax = CreateConVar("sm_backpack_loot_weapon_max", "2", 
+		"Maximum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
 	cvHints = CreateConVar("sm_backpack_show_hints", "1",
 		"Whether to show screen hints on how to use backpacks");
@@ -828,7 +837,7 @@ public void OnPluginStart()
 	cvGlowDist = CreateConVar("sm_backpack_glow_distance", "300.0", 
 	 "If highlight mode is set to outline, distance at which the glow stops being seen");
 
-	cvNpcBackpackChance = CreateConVar("sm_backpack_zombie_chance", "0.005",
+	cvNpcBackpackChance = CreateConVar("sm_backpack_zombie_spawn_chance", "0.005",
 	 "Chance for a zombie to spawn with a backpack. Set to zero or negative to disable");
 
 	cvOptimize = CreateConVar("sm_backpack_enable_optimizations", "1",
@@ -839,7 +848,6 @@ public void OnPluginStart()
 	AutoExecConfig(true, "plugin.backpack2");
 
 	inv_maxcarry = FindConVar("inv_maxcarry");
-	sv_zombie_crawler_health = FindConVar("sv_zombie_crawler_health");
 
 	backpacks = new ArrayList(sizeof(Backpack));
 	templates = new ArrayList(sizeof(BackpackTemplate));
@@ -849,75 +857,17 @@ public void OnPluginStart()
 
 	ParseConfig();
 
-	// inv_maxcarry = FindConVar("inv_maxcarry");
-
 	AddCommandListener(Cmd_TakeItems, "takeitems");
 	AddCommandListener(Cmd_CloseBox, "closeitembox");
 	RegAdminCmd("sm_bp", Cmd_Backpack, ADMFLAG_CHEATS);
 	RegAdminCmd("sm_backpack", Cmd_Backpack, ADMFLAG_CHEATS);
 
+	hintCookie.SetPrefabMenu(CookieMenu_OnOff_Int, "Backpack2 Hints");
 
-	HookEvent("game_restarting", OnGameRestarting, EventHookMode_PostNoCopy);
-	HookEvent("npc_killed", OnNPCKilled);
 
 	for (int i = 1; i <= MaxClients; i++)
 		if (IsClientInGame(i))
 			OnClientPutInServer(i);
-
-}
-
-void SetCookieMenu(int client, CookieMenuAction action, any info, char[] buffer, int maxlen)
-{
-	if (action == CookieMenuAction_DisplayOption)
-	{
-		Format(buffer, maxlen, "%T", "Backpack Settings", client);
-	}
-
-	else if (action == CookieMenuAction_SelectOption)
-	{
-		ShowBackpackSettings(client);
-	}
-}
-
-void ShowBackpackSettings(int client)
-{
-	Menu menu = new Menu(HandleCookieMenu);
-
-	char buffer[512];
-
-	if (ClientWantsHints(client)) {
-		FormatEx(buffer, sizeof(buffer), "%T", "Hints Enabled", client);
-	}
-	else {
-		FormatEx(buffer, sizeof(buffer), "%T", "Hints Disabled", client);
-	}
-
-	menu.AddItem("nohints", buffer);
-	menu.Display(client, MENU_TIME_FOREVER);
-}
-
-public int HandleCookieMenu(Menu menu, MenuAction action, int param1, int param2)
-{
-	if (action == MenuAction_Select)
-	{
-		char info[32];
-		menu.GetItem(param2, info, sizeof(info));
-
-		if (StrEqual(info, "nohints"))
-		{
-			char value[11];
-			hintCookie.Get(param1, value, sizeof(value));
-			PrintCenterText(param1, "%s", value);
-			hintCookie.Set(param1, value[0] == '0' ? "1" : "0");
-			ShowBackpackSettings(param1);
-		}
-	}
-
-	else if (action == MenuAction_End) {
-		delete menu;
-	}
-
-	return 0;
 }
 
 
@@ -928,18 +878,9 @@ void CvarChangeOptimize(ConVar convar, const char[] oldValue, const char[] newVa
 
 public Action Cmd_DropBackpack(int client, int args)
 {
-	if (wearingBackpack[client]) 
-	{
-		int idx = backpacks.FindValue(EntIndexToEntRef(client), Backpack::wearerRef);
-		if (idx != -1)
-		{
-			Backpack bp;
-			backpacks.GetArray(idx, bp);
-			bp.Drop();
-			backpacks.SetArray(idx, bp);
-		}
+	if (IsValidPlayer(client)) {
+		ClientDropBackpack(client);
 	}
-
 	return Plugin_Handled;
 }
 
@@ -1350,21 +1291,18 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 
 			if (StrEqual(classname, "me_fists"))
 			{
-				int bID = backpacks.FindValue(EntIndexToEntRef(client), Backpack::wearerRef);
-				if (bID != -1)
-				{
-					Backpack bp;
-					backpacks.GetArray(bID, bp);
-					bp.Drop();
-					backpacks.SetArray(bID, bp);
-				}	
+				ClientDropBackpack(client);
+				
+				// TODO: This probably shouldn't be here
+				if (ClientWantsHints(client)) {
+					SendBackpackHint(client, "");
+				}
 			}
 		}
 	}
 
 	else if (cvHints.BoolValue && ClientWantsHints(client))
 	{
-
 		float curTime = GetTickedTime();
 		if (curTime < nextHintTime[client]) {
 			return Plugin_Continue;
@@ -1412,9 +1350,13 @@ bool ClientWantsHints(int client)
 	{
 		char value[11];
 		hintCookie.Get(client, value, sizeof(value));
-		return value[0] == '0';
+
+		if (value[0] && value[0] == '0') 
+		{
+			return false;
+		}
 	}
-	
+
 	return true;
 }
 
@@ -1489,17 +1431,6 @@ void OnGameRestarting(Event event, const char[] name, bool dontBroadcast)
 
 void DeleteAllBackpacks()
 {
-	// FIXME
-
-	// L 11/10/2021 - 16:23:17: [SM] Exception reported: Entity 277 (277) is not a valid entity
-	// L 11/10/2021 - 16:23:17: [SM] Blaming: backpack2.smx
-	// L 11/10/2021 - 16:23:17: [SM] Call stack trace:
-	// L 11/10/2021 - 16:23:17: [SM]   [0] RemoveEntity
-	// L 11/10/2021 - 16:23:17: [SM]   [1] Line 623, backpack2.sp::Backpack::Delete
-	// L 11/10/2021 - 16:23:17: [SM]   [2] Line 1108, backpack2.sp::DeleteAllBackpacks
-	// L 11/10/2021 - 16:23:17: [SM]   [3] Line 747, backpack2.sp::OnPluginEnd
-
-
 	Backpack bp;
 
 	int max = backpacks.Length;
@@ -1976,7 +1907,7 @@ void GetLootOfCategory(int category, ArrayList dest)
 
 int GetMaxClip1(int weapon)
 {
-	return RunEntVScriptInt(weapon, "GetMaxClip1()");
+	RunEntVScriptInt(weapon, "GetMaxClip1()");
 }
 
 float GetWeaponWeight(int weapon)
@@ -2004,3 +1935,14 @@ bool ClientOwnsWeapon(int client, const char[] name)
 	return false;
 }
 
+void FreezePlayer(int client)
+{
+	int curFlags = GetEntProp(client, Prop_Send, "m_fFlags");
+	SetEntProp(client, Prop_Send, "m_fFlags", curFlags | 128);
+}
+
+void UnfreezePlayer(int client)
+{
+	int curFlags = GetEntProp(client, Prop_Send, "m_fFlags");
+	SetEntProp(client, Prop_Send, "m_fFlags", curFlags & ~128);
+}
