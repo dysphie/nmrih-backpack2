@@ -1,6 +1,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clientprefs>
+#include <vscript_proxy>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -1747,19 +1748,7 @@ bool GetItemByID(int itemID, Item reg)
 
 float GetCarriedWeight(int client) 
 {
-	int logic = CreateEntityByName("logic_script");
-
-	char buffer[75];
-	FormatEx(buffer, sizeof(buffer),
-		"self.SetName(EntIndexToHScript(%d).GetCarriedWeight().tostring())", client);
-
-	SetVariantString(buffer);
-	AcceptEntityInput(logic, "RunScriptCode");
-	GetEntPropString(logic, Prop_Send, "m_iName", buffer, sizeof(buffer));
-
-	RemoveEntity(logic);
-
-	return StringToFloat(buffer);
+	return RunEntVScriptFloat(client, "GetCarriedWeight()");
 }
 
 Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& damage, int& damagetype)
@@ -1987,24 +1976,12 @@ void GetLootOfCategory(int category, ArrayList dest)
 
 int GetMaxClip1(int weapon)
 {
-	SetVariantString("self.SetName(self.GetMaxClip1().tostring())");
-	AcceptEntityInput(weapon, "RunScriptCode", weapon, weapon);
-
-	char result[11];
-	GetEntPropString(weapon, Prop_Data, "m_iName", result, sizeof(result));
-
-	return StringToInt(result);
+	return RunEntVScriptInt(weapon, "GetMaxClip1()");
 }
 
 float GetWeaponWeight(int weapon)
 {
-	SetVariantString("self.SetName(self.GetWeight().tostring())");
-	AcceptEntityInput(weapon, "RunScriptCode", weapon, weapon);
-
-	char result[11];
-	GetEntPropString(weapon, Prop_Data, "m_iName", result, sizeof(result));
-
-	return StringToFloat(result);
+	return RunEntVScriptFloat(weapon, "GetWeight()");
 }
 
 bool ClientOwnsWeapon(int client, const char[] name)
@@ -2026,3 +2003,4 @@ bool ClientOwnsWeapon(int client, const char[] name)
 
 	return false;
 }
+
