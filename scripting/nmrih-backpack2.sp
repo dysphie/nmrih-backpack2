@@ -1907,7 +1907,7 @@ void GetLootOfCategory(int category, ArrayList dest)
 
 int GetMaxClip1(int weapon)
 {
-	RunEntVScriptInt(weapon, "GetMaxClip1()");
+	return RunEntVScriptInt(weapon, "GetMaxClip1()");
 }
 
 float GetWeaponWeight(int weapon)

@@ -19,6 +19,15 @@ These features are currently unavailable, though I plan on adding them
 
 - Speed penalties for backpack carrier
 - Backpack settings: `weight`, `admin_can_use`, `admin_can_wear`, `zombie_can_wear`, `colorize`
+- Admin menu
+
+## Backpack template options
+
+You can configure backpack types, behavior and appareance in `addons/sourcemod/configs/backpack2.cfg`
+
+- `itembox_model` - Model to use on dropped backpacks.
+- `ornament_model`  - Model to render on the player's back
+- `sounds` - Sound effects used by this backpack, see config for examples
 	
 ## Cvars
 
@@ -41,11 +50,6 @@ Configuration variables are saved to `cfg/sourcemod/plugin.backpack2.cfg`
 - `sm_backpack_zombie_weapon_min` `[0-8]` - Minimum gear items to spawn in backpacks carried by zombies
 - `sm_backpack_zombie_weapon_max` `[0-8]` - Maximum gear items to spawn in backpacks carried by zombies
 
-## Backpack template options
+## Admin Commands
 
-You can configure backpack types, behavior and appareance in `addons/sourcemod/configs/backpack2.cfg`
-
-- `itembox_model` - Model to use on dropped backpacks.
-- `ornament_model`  - Model to render on the player's back
-- `sounds` - Sound effects used by this backpack, see config for examples
-
+- `sm_backpack <userid|#name>` - Gives target a backpack, requires ADMFLAG_CHEATS
