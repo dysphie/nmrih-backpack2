@@ -1,5 +1,5 @@
 # [NMRiH] Backpack2
-This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/showthread.php?t=308217)
+This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/showthread.php?t=308217) with added features and bug fixes.
 
 ## What's new
 
