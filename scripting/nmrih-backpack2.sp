@@ -1135,7 +1135,7 @@ void OnAmmoBoxSpawned(int ammobox)
 
 void OnWeaponDropped(int client, int weapon)
 {
-	if (!IsValidPlayer(client)) {
+	if (!IsValidPlayer(client) || !IsValidEdict(weapon)) {
 		return;
 	}
 
