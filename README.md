@@ -23,47 +23,78 @@ These features are currently unavailable, though I plan on adding them
 
 ## Backpack template options
 
-You can configure backpack types, behavior and appareance in `addons/sourcemod/configs/backpack2.cfg`
+You can configure backpack types, behavior and appareance in `addons/sourcemod/configs/backpack2.cfg`.
 
 - `itembox_model` - Model to use on dropped backpacks.
 - `ornament_model`  - Model to render on the player's back
 - `sounds` - Sound effects used by this backpack, see config for examples
-- `max_weapons [0-8]`, `max_gear [0-4]`, `max_ammoboxes [0-8]` - Size limits of the backpack
-- `loot` `yes/no` - For weapon registry entries, if set to no, prevents them from being spawned as loot
+- `max_left [0-8]`, `max_middle [0-4]`, `max_right [0-8]` - Size limit for each column of the backpack
 
-## Overriding item placement
+	Example: 
+	```cpp
+	"Giraffe Plushie"
+	{
+		"ornament_model" "models/survival/item_dufflebag_backpack.mdl"
 
-Weapon definitions include a `columns` key. This allows you to override the placement for a given item.
-Valid values are `left`, `middle` and `right`, and you can also combine them
+		"itembox_model" "models/anxiety/giraffe.mdl"
 
-Examples: 
+		"sounds"
+		{
+			"backpack_open"
+			{
+				"player/bleed/pugman/bleeding02.wav" "1"
+				"player/bleed/pugman/bleeding03.wav" "1"
+				"player/bleed/pugman/bleeding04.wav" "1"
+			}
+		}
 
-- Move pills to the ammo column:
-```cpp
-"item_pills"
-{
-	"id" "44"
-	"columns" "ammo"
-}
-```
+		"max_left"		"4"
+		"max_middle"	"2"
+		"max_right"		"4"
+	}
+	```
 
-- Allow hammer to overflow into the "gear" column if the "weapon" column is full
-```cpp
-"me_sledge"
-{
-	"id" "40"
-	"columns" "left middle"
-}
-```
+## Item configs
 
-- Prevent maglite from being added to backpacks
-```cpp
-"item_maglite"
-{
-	"id" "42"
-	"columns" ""
-}
-```
+Keys not mentioned here should be left as-is unless you know what you're doing, as they're required for the plugin to function properly.
+- `loot` `yes/no` - Whether this item can be spawned as random loot for backpacks dropped by zombies
+- `capacity` - Allows you to override the maximum capacity for a given ammo box. This affects random loot and ammo stacking.
+
+	For example:
+	```cpp
+	// Make backpacks able to hold (20 * sm_backpack_ammo_stack_limit) boards per slot
+	"ammobox_board"
+	{
+		"capacity"		"20"
+		...
+	}
+	````
+
+- `columns` - This allows you to override the placement for a given item. Valid values are `left`, `middle` and `right`, and they can be combined to allow for multiple columns.
+
+	For example: 
+	```cpp
+	// Move pills to the ammo column
+	"item_pills"
+	{
+		"id" "44"
+		"columns" "ammo"
+	}
+
+	// Allow hammer to overflow into the "gear" column if the "weapon" column is full
+	"me_sledge"
+	{
+		"id" "40"
+		"columns" "left middle"
+	}
+
+	// Prevent maglite from being added to backpacks
+	"item_maglite"
+	{
+		"id" "42"
+		"columns" ""
+	}
+	```
 ## Cvars
 
 Configuration variables are saved to `cfg/sourcemod/plugin.backpack2.cfg`
@@ -76,14 +107,14 @@ Configuration variables are saved to `cfg/sourcemod/plugin.backpack2.cfg`
 - `sm_backpack_glow_blip` `0/1` - Whether glowing backpacks show up in player compasses, if applicable
 - `sm_backpack_glow_distance` - Distance at which glowing backpacks stop glowing, if applicable
 - `sm_backpack_zombie_chance` `[0.0-1.0]` - Chance for a zombie to spawn with a backpack. 0 means never, 1.0 means 100%. For reference, crawler chance is 0.02
-- `sm_backpack_zombie_ammo_min` `[0-8]` - Minimum ammo boxes to spawn in backpacks carried by zombies
-- `sm_backpack_zombie_ammo_min_pct` `[0-100]` - Minimum fill percentage for ammo boxes spawned in backpacks carried by zombies
-- `sm_backpack_zombie_ammo_min` `[0-8]` - Maximum ammo boxes to spawn in backpacks carried by zombies
-- `sm_backpack_zombie_ammo_max_pct` `[0-100]` - Maximum fill percentage for ammo boxes spawned in backpacks carried by zombies
-- `sm_backpack_zombie_gear_min` `[0-4]` - Minimum gear items to spawn in backpacks carried by zombies
-- `sm_backpack_zombie_gear_max` `[0-4]` - Maximum gear items to spawn in backpacks carried by zombies
-- `sm_backpack_zombie_weapon_min` `[0-8]` - Minimum gear items to spawn in backpacks carried by zombies
-- `sm_backpack_zombie_weapon_max` `[0-8]` - Maximum gear items to spawn in backpacks carried by zombies
+- `sm_backpack_zombie_ammo_min` `[0-8]` - Minimum items to place in the 'Ammo' column for backpacks spawned as loot
+- `sm_backpack_zombie_ammo_max` `[0-8]` - Maximum items to place in the 'Ammo' column for backpacks spawned as loot
+- `sm_backpack_zombie_gear_min` `[0-4]` - Minimum items to place in the 'Gear' column for backpacks spawned as loot
+- `sm_backpack_zombie_gear_max` `[0-4]` - Maximum items to place in the 'Gear' column for backpacks spawned as loot
+- `sm_backpack_zombie_weapon_min` `[0-8]` - Minimum items to place in the 'Weapon' column for backpacks spawned as loot
+- `sm_backpack_zombie_weapon_max` `[0-8]` - Maximum items to place in the 'Weapon' column for backpacks spawned as loot
+- `sm_backpack_zombie_ammo_min_pct` `[0-100]` - Minimum ammo fill percentage for weapons and ammo boxes spawned as backpack loot
+- `sm_backpack_zombie_ammo_max_pct` `[0-100]` - Maximum ammo fill percentage for weapons and ammo boxes spawned as backpack loot
 
 ## Admin Commands
 
