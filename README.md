@@ -30,7 +30,40 @@ You can configure backpack types, behavior and appareance in `addons/sourcemod/c
 - `sounds` - Sound effects used by this backpack, see config for examples
 - `max_weapons [0-8]`, `max_gear [0-4]`, `max_ammoboxes [0-8]` - Size limits of the backpack
 - `loot` `yes/no` - For weapon registry entries, if set to no, prevents them from being spawned as loot
-	
+
+## Overriding item placement
+
+Weapon definitions include a `columns` key. This allows you to override the placement for a given item.
+Valid values are `left`, `middle` and `right`, and you can also combine them
+
+Examples: 
+
+- Move pills to the ammo column:
+```cpp
+"item_pills"
+{
+	"id" "44"
+	"columns" "ammo"
+}
+```
+
+- Allow hammer to overflow into the "gear" column if the "weapon" column is full
+```cpp
+"me_sledge"
+{
+	"id" "40"
+	"columns" "left middle"
+}
+```
+
+- Prevent maglite from being added to backpacks
+```cpp
+"item_maglite"
+{
+	"id" "42"
+	"columns" ""
+}
+```
 ## Cvars
 
 Configuration variables are saved to `cfg/sourcemod/plugin.backpack2.cfg`
