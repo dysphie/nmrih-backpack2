@@ -45,4 +45,9 @@
 	{
 		"en" "Not enough room for this item!"
 	}
+
+	"Invalid Drop Position"
+	{
+		"en"	"Backpack cannot be dropped here"
+	}
 }

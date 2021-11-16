@@ -12,14 +12,14 @@
 // FIXME: Sanity checks everywhere!
 // TODO: Ensure players can't get stuck in the supply crate interface
 // TODO: Glow backpacks when obj items are added to them, and restore targetnames
+// TODO: Dont show hints while at interface
+
+// TODO: TakeItem update might be off now that categories and cols are different
 
 #define PLUGIN_PREFIX "[Backpack2] "
 
-#define SUPPLY_MAX_WEAPONS 8
-#define SUPPLY_MAX_GEAR 4
-#define SUPPLY_MAX_AMMO 8
 
-#define MASK_WIP 0
+#define MASK_NONE 0
 
 #define INVALID_USER_ID 0
 
@@ -34,10 +34,6 @@
 
 #define MAX_BP_USE_DISTANCE 90.0
 
-#define NONE 0
-#define WEAPON 1
-#define GEAR 2
-#define AMMO 3
 
 #define MAXPLAYERS_NMRIH 9
 
@@ -48,14 +44,28 @@
 #define GLOWTYPE_BLINK 2
 
 #define MASK_ITEM 0
-#define INVALID_ITEM_ID 0
-#define INVALID_AMMO_ID -1
+#define INVALID_ITEM 0
+#define INVALID_AMMO -1
+
+enum 
+{
+	COL_LEFT,
+	COL_MIDDLE,
+	COL_RIGHT,
+	COL_MAX
+}
+
+enum 
+{
+	CAT_WEAPON,
+	CAT_AMMO
+}
 
 public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie",
 	description = "Portable inventory boxes",
-	version     = "2.0.0",
+	version     = "2.0.1",
 	url         = ""
 };
 
@@ -71,14 +81,14 @@ ConVar cvBackpackCount;
 ConVar cvAmmoMultiplier;
 ConVar cvBackpackColorize;
 
-ConVar cvAmmoLootMin;
-ConVar cvAmmoLootMax;
+ConVar cvRightLootMin;
+ConVar cvRightLootMax;
 ConVar cvAmmoLootMinPct;
 ConVar cvAmmoLootMaxPct;
-ConVar cvGearLootMin;
-ConVar cvGearLootMax;
-ConVar cvWeaponLootMin;
-ConVar cvWeaponLootMax;
+ConVar cvMiddleLootMin;
+ConVar cvMiddleLootMax;
+ConVar cvLeftLootMin;
+ConVar cvLeftLootMax;
 
 ConVar inv_maxcarry = null;
 
@@ -112,6 +122,7 @@ enum struct Item
 	char alias[64];
 	int id;
 	int category;
+	int columns;		// Columns this item can go in
 	bool spawnAsLoot;
 	int ammoID;
 	int capacity;
@@ -128,9 +139,7 @@ enum
 
 enum struct BackpackTemplate
 {
-	int weaponLimit;
-	int gearLimit;
-	int ammoLimit;
+	int itemLimit[COL_MAX];
 
 	char attachMdl[PLATFORM_MAX_PATH];
 	char droppedMdl[PLATFORM_MAX_PATH];
@@ -166,10 +175,8 @@ enum struct Backpack
 
 	int propRef;			// Entity reference to the backpack's object in the world
 	int wearerRef;				// Entity reference to the backpack wearer
-
-	ArrayList weapons;		// List of stored weapons and their ammo count
-	ArrayList gears;		// List of stored weapons and their ammo count
-	ArrayList ammos;			
+	
+	ArrayList items[COL_MAX];	
 
 	int atInterface[MAXPLAYERS_NMRIH+1];    // True if player index is likely browsing the backpack
 											// Must verify with in-game check
@@ -190,19 +197,13 @@ enum struct Backpack
 		BackpackTemplate template;
 		templates.GetArray(this.templateID, template);
 
-		this.weapons = new ArrayList(sizeof(StoredItem));
-		for (int i; i < template.weaponLimit; i++) {
-			this.weapons.PushArray(blank);
-		}
-
-		this.gears = new ArrayList(sizeof(StoredItem));
-		for (int i; i < template.gearLimit; i++) {
-			this.gears.PushArray(blank);
-		}
-
-		this.ammos = new ArrayList(sizeof(StoredItem));
-		for (int i; i < template.ammoLimit; i++) {
-			this.ammos.PushArray(blank);
+		for (int i = 0; i < COL_MAX; i++) 
+		{
+			this.items[i] = new ArrayList(sizeof(StoredItem));
+			for (int j; j < template.itemLimit[i]; j++) 
+			{
+				this.items[i].PushArray(blank);
+			}
 		}
 
 		this.propRef = INVALID_ENT_REFERENCE;
@@ -220,74 +221,71 @@ enum struct Backpack
 		}
 	}
 
-	void AddRandomAmmoBoxes(int count)
+	void ShuffleContents()
 	{
-		for (int i; i < count; i++)
-		{
-			ArrayList candidates = new ArrayList(sizeof(Item));
-			GetLootOfCategory(AMMO, candidates);
-
-			int rnd = GetRandomInt(0, candidates.Length - 1);
-
-			Item ammo;
-			candidates.GetArray(rnd, ammo);
-
-			int minAmmo = ammo.capacity * cvAmmoLootMinPct.IntValue / 100;
-			if (minAmmo < 1) { 
-				minAmmo = 1; 
-			}
-
-			int maxAmmo = ammo.capacity * cvAmmoLootMaxPct.IntValue / 100;
-			int rndClip = GetRandomInt(minAmmo, maxAmmo);
-
-			this.AddItem(rndClip, ammo, true, false);
-
-			delete candidates;
+		for (int i = 0; i < COL_MAX; i++) {
+			this.items[i].Sort(Sort_Random, Sort_Integer);	
 		}
 	}
 
-	void ShuffleContents()
-	{
-		this.weapons.Sort(Sort_Random, Sort_Integer);
-		this.gears.Sort(Sort_Random, Sort_Integer);
-		this.ammos.Sort(Sort_Random, Sort_Integer);
-	}
-
-	void AddRandomWeapons(int count, int category)
+	void AddRandomLoot(int count, int column)
 	{
 		// Get candidate weapons
-		ArrayList weapons = new ArrayList(sizeof(Item));
-		GetLootOfCategory(category, weapons);
+		ArrayList loot = new ArrayList(sizeof(Item));
+		GetLootForColumn(column, loot); // FIXME
+
+		int numLoot = loot.Length;
+		if (numLoot <= 0) 
+		{
+			delete loot;
+			return;
+		}
 
 		// For each available slot, get a random weapon and ammo count
 		for (int i; i < count; i++)
 		{
-			int rnd = GetRandomInt(0, weapons.Length - 1);    
+			int rnd = GetRandomInt(0, numLoot - 1);    
 
 			Item reg;
-			weapons.GetArray(rnd, reg);
+			loot.GetArray(rnd, reg);
 
-			int weapon = CreateEntityByName(reg.alias);
-			DispatchSpawn(weapon);
-
-			int rndClip = 0;
-			int maxClip = GetMaxClip1(weapon);
-			if (maxClip > 0)
+			if (reg.category == CAT_WEAPON)
 			{
-				int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
-				int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
-				rndClip = GetRandomInt(min, max);	
-			}
+				int weapon = CreateEntityByName(reg.alias);
+				DispatchSpawn(weapon);
 
-			// if we couldn't fit this, backpack is full, stop
-			if (this.AddItem(rndClip, reg, true) != 0) {
-				break;
-			}
+				int rndClip = 1;
+				int maxClip = GetMaxClip1(weapon);
+				if (maxClip != -1)
+				{
+					int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
+					int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
+					rndClip = GetRandomInt(min, max);	
+				}
 
-			RemoveEntity(weapon);
+				// if we couldn't fit this, backpack is full, stop
+				// TODO: Is it?
+				if (this.AddItem(rndClip, reg, true) != 0) {
+					break;
+				}
+
+				RemoveEntity(weapon);
+			}
+			else if (reg.category == CAT_AMMO)
+			{
+				int minAmmo = reg.capacity * cvAmmoLootMinPct.IntValue / 100;
+				if (minAmmo < 1) { 
+					minAmmo = 1; 
+				}
+
+				int maxAmmo = reg.capacity * cvAmmoLootMaxPct.IntValue / 100;
+				int rndClip = GetRandomInt(minAmmo, maxAmmo);
+
+				this.AddItem(rndClip, reg, true, false);
+			}
 		}
 
-		delete weapons;
+		delete loot;
 	}
 
 	void HighlightEntity(int entity)
@@ -441,35 +439,27 @@ enum struct Backpack
 		BfWrite bf = UserMessageToBfWrite(msg);
 		bf.WriteShort(dropped);
 
-		int i = 0;
-		int max = this.weapons.Length;
-		for (; i < max; i++) {
-			bf.WriteShort(this.weapons.Get(i, StoredItem::id));
+		// Describe every cell in the inventory box
+
+		int expected[] = { 8, 4, 8 };
+
+		for (int k = 0; k < COL_MAX; k++)
+		{
+			int i = 0;
+			int max = this.items[k].Length;
+			for (; i < max; i++)
+			{
+				bf.WriteShort(this.items[k].Get(i, StoredItem::id));
+			}
+
+			// Our columns might be smaller than the game expects due
+			// configurable backpack limits, make sure to fill the rest
+			for (; i < expected[k]; i++) {
+				bf.WriteShort(INVALID_ITEM);
+			}	
 		}
 
-		for (; i < 8; i++) {
-			bf.WriteShort(INVALID_ITEM_ID);
-		}
 
-		i = 0;
-		max = this.gears.Length;
-		for (; i < max; i++) {
-			bf.WriteShort(this.gears.Get(i, StoredItem::id));
-		}
-
-		for (; i < 4; i++) {
-			bf.WriteShort(INVALID_ITEM_ID);
-		}	
-
-		i = 0;
-		max = this.ammos.Length;
-		for (; i < max; i++) {
-			bf.WriteShort(this.ammos.Get(i, StoredItem::id));
-		}
-
-		for (; i < 8; i++) {
-			bf.WriteShort(INVALID_ITEM_ID);
-		}
 
 		EndMessage();
 		this.atInterface[client] = true;
@@ -494,67 +484,78 @@ enum struct Backpack
 
 	int AddItem(int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
 	{
-		switch (reg.category)
+		int leftover = ammoCount;
+
+		for (int i; i < COL_MAX; i++) {
+			if (leftover > 0 && (reg.columns & (1 << i))) {
+				leftover = this.AddItemToColumn(i, ammoCount, reg, suppressSound, allowStacking);
+			}
+		}
+
+		return leftover;
+	}
+
+	int AddItemToColumn(int col, int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
+	{
+		ArrayList arr = this.items[col];
+
+		if (reg.category == CAT_WEAPON)
 		{
-			case WEAPON, GEAR:
-			{
-				ArrayList arr = reg.category == WEAPON ? this.weapons : this.gears;
-				int maxItems = arr.Length;
+			int maxItems = arr.Length;
 
-				for (int i = 0; i < maxItems; i++)
+			for (int i = 0; i < maxItems; i++)
+			{
+				StoredItem stored;
+				arr.GetArray(i, stored);
+
+				if (stored.id == INVALID_ITEM)
 				{
-					StoredItem stored;
-					arr.GetArray(i, stored);
-
-					if (stored.id == INVALID_ITEM_ID)
-					{
-						stored.id = reg.id;
-						stored.ammoCount = ammoCount;
-						
-						if (!suppressSound) {
-							this.PlaySound(SoundAdd);
-						}
-
-						arr.SetArray(i, stored);
-						return 0;
+					stored.id = reg.id;
+					stored.ammoCount = ammoCount;
+					
+					if (!suppressSound) {
+						this.PlaySound(SoundAdd);
 					}
-				}	
-			}
-			case AMMO:
-			{
-				int fullCapacity = RoundToNearest(reg.capacity * cvAmmoMultiplier.FloatValue);
-				if (fullCapacity <= 0) {
-					fullCapacity = cellmax;
-				}
-				
-				int leftover = this.AddAmmoRecursively(reg.id, ammoCount, fullCapacity, allowStacking);
 
-				if (!suppressSound && leftover < ammoCount) {
-					this.PlaySound(SoundAdd);
+					arr.SetArray(i, stored);
+					return 0;
 				}
-
-				return leftover;
+			}	
+		}
+		else if (reg.category == CAT_AMMO)
+		{
+			int fullCapacity = RoundToNearest(reg.capacity * cvAmmoMultiplier.FloatValue);
+			if (fullCapacity <= 0) {
+				fullCapacity = cellmax;
 			}
+			
+			int leftover = this.AddAmmoRecursively(arr, reg.id, ammoCount, fullCapacity, allowStacking);
+
+			if (!suppressSound && leftover < ammoCount) {
+				this.PlaySound(SoundAdd);
+			}
+
+			return leftover;
 		}
 
 		return ammoCount;
 	}
 
-	int AddAmmoRecursively(int itemID, int curAmmo, int maxAmmo, bool allowStacking = true)
+	int AddAmmoRecursively(ArrayList arr, int itemID, int curAmmo, int maxAmmo, bool allowStacking = true)
 	{
 		int bestSlot = -1;
 		int bestIntake = -1;
 
-		for (int i = 0; i < this.ammos.Length; i++)
+		for (int i = 0; i < arr.Length; i++)
 		{       
 			StoredItem stored;
-			this.ammos.GetArray(i, stored);
+			arr.GetArray(i, stored);
 
 			if (stored.id == itemID && allowStacking)
 			{
 				// We choose this slot if our best slot is undefined or empty
 				// or it can hold more ammo than the best slot
-				if (bestSlot == -1 || this.ammos.Get(bestSlot, StoredItem::id) == INVALID_ITEM_ID)
+				if (bestSlot == -1 || arr.Get(bestSlot, StoredItem::id) == INVALID_ITEM)
 				{
 					int intake = maxAmmo - stored.ammoCount;
 					if (intake && intake > bestIntake)
@@ -564,7 +565,7 @@ enum struct Backpack
 					}
 				}
 			}
-			else if (stored.id == INVALID_ITEM_ID && bestSlot == -1)
+			else if (stored.id == INVALID_ITEM && bestSlot == -1)
 			{
 				// We choose this slot if our best slot is undefined
 				// else we prioritize partially full slots
@@ -580,13 +581,13 @@ enum struct Backpack
 				bestIntake = curAmmo;
 
 			StoredItem addTo;
-			this.ammos.GetArray(bestSlot, addTo);
+			arr.GetArray(bestSlot, addTo);
 
 			curAmmo -= bestIntake;
 			addTo.ammoCount += bestIntake;
 			addTo.id = itemID;
 
-			this.ammos.SetArray(bestSlot, addTo);
+			arr.SetArray(bestSlot, addTo);
 
 			// Don't take more ammo than we have
 			if (curAmmo < 0)
@@ -595,7 +596,7 @@ enum struct Backpack
 			}
 			else if (curAmmo > 0)
 			{
-				this.AddAmmoRecursively(itemID, curAmmo, maxAmmo);
+				this.AddAmmoRecursively(arr, itemID, curAmmo, maxAmmo);
 			}
 		}
 		
@@ -619,7 +620,7 @@ enum struct Backpack
 		}
 	}
 
-	bool TakeItem(int index, int category, int client)
+	bool TakeItem(int index, int column, int client)
 	{
 		if (!CanReachBackpack(client, this.propRef)) 
 		{
@@ -627,25 +628,27 @@ enum struct Backpack
 			return false;
 		}
 
-		// TODO: Check weight of weapon plus its ammo
-		if (category == WEAPON || category == GEAR)
+		StoredItem stored;
+		this.items[column].GetArray(index, stored); // fix me, could be invalid?
+
+		if (stored.id == INVALID_ITEM) 
 		{
-			ArrayList arr = category == WEAPON ? this.weapons : this.gears;
+			this.EndUse(client);
+			return false;
+		}
 
-			StoredItem stored;
-			arr.GetArray(index, stored);
+		Item reg;
+		if (!GetItemByID(stored.id, reg)) {
+			return false;
+		}
 
-			Item reg;
-			if (!GetItemByID(stored.id, reg)) {
-				return false;
-			}
-
+		if (reg.category == CAT_WEAPON)
+		{
 			if (ClientOwnsWeapon(client, reg.alias)) 
 			{
 				PrintCenterText(client, "%t", "Already Own This Type");
 				return false;
 			}
-
 			int weapon = CreateEntityByName(reg.alias);
 			if (weapon == -1) {
 				return false;
@@ -672,20 +675,16 @@ enum struct Backpack
 				AcceptEntityInput(weapon, "Use", client, client);
 			}
 
-			stored.id = INVALID_ITEM_ID;
+			stored.id = INVALID_ITEM;
 			stored.ammoCount = 0;
-			arr.SetArray(index, stored);
+			this.items[column].SetArray(index, stored);
 
-			this.TakeItemUpdate(index, category);
+			this.TakeItemUpdate(index, column);
 		}
 
-		else if (category == AMMO)
+		else if (reg.category == CAT_AMMO)
 		{
-			StoredItem stored;
-			this.ammos.GetArray(index, stored);
-
-			Item reg;
-			if (!GetItemByID(stored.id, reg) || reg.ammoID == INVALID_AMMO_ID) {
+			if (reg.ammoID == INVALID_AMMO) {
 				return false;
 			}
 
@@ -710,9 +709,9 @@ enum struct Backpack
 
 			if (stored.ammoCount <= 0)
 			{
-				stored.id = INVALID_ITEM_ID;
-				this.ammos.SetArray(index, stored);
-				this.TakeItemUpdate(index, category);
+				stored.id = INVALID_ITEM;
+				this.items[column].SetArray(index, stored);
+				this.TakeItemUpdate(index, column);
 			}
 		}
 
@@ -739,9 +738,9 @@ enum struct Backpack
 			RemoveEntity(dropped);
 		}
 
-		delete this.weapons;
-		delete this.gears;
-		delete this.ammos;
+		for (int i = 0; i < COL_MAX; i++) {
+			delete this.items[i];
+		}
 	}
 }
 
@@ -792,10 +791,10 @@ public void OnPluginStart()
 			MAXENTITIES, MaxEntities);
 	}
 
-	cvAmmoLootMin = CreateConVar("sm_backpack_loot_ammo_min", "0", 
+	cvRightLootMin = CreateConVar("sm_backpack_loot_ammo_min", "0", 
 		"Minimum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvAmmoLootMax = CreateConVar("sm_backpack_loot_ammo_max", "4", 
+	cvRightLootMax = CreateConVar("sm_backpack_loot_ammo_max", "4", 
 		"Maximum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
 	cvAmmoLootMinPct = CreateConVar("sm_backpack_loot_ammo_min_pct", "40", 
@@ -804,16 +803,16 @@ public void OnPluginStart()
 	cvAmmoLootMaxPct = CreateConVar("sm_backpack_loot_ammo_max_pct", "100", 
 		"Maximum fill percentage for ammo boxes spawned as backpack loot", _, true, 1.0);
 
-	cvGearLootMin = CreateConVar("sm_backpack_loot_gear_min", "0", 
+	cvMiddleLootMin = CreateConVar("sm_backpack_loot_gear_min", "0", 
 		"Minimum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
 
-	cvGearLootMax = CreateConVar("sm_backpack_loot_gear_max", "1", 
+	cvMiddleLootMax = CreateConVar("sm_backpack_loot_gear_max", "1", 
 		"Maximum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
 
-	cvWeaponLootMin = CreateConVar("sm_backpack_loot_weapon_min", "0", 
+	cvLeftLootMin = CreateConVar("sm_backpack_loot_weapon_min", "0", 
 		"Minimum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvWeaponLootMax = CreateConVar("sm_backpack_loot_weapon_max", "2", 
+	cvLeftLootMax = CreateConVar("sm_backpack_loot_weapon_max", "2", 
 		"Maximum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
 	cvHints = CreateConVar("sm_backpack_show_hints", "1",
@@ -970,22 +969,29 @@ Action Cmd_TakeItems(int client, const char[] command, int argc)
 	Backpack bp;
 	backpacks.GetArray(idx, bp);
 
-	char cmdWeaponSlot[11], cmdGearSlot[11], cmdAmmoSlot[11];
-	GetCmdArg(2, cmdWeaponSlot, sizeof(cmdWeaponSlot));
-	GetCmdArg(3, cmdGearSlot, sizeof(cmdGearSlot));
-	GetCmdArg(4, cmdAmmoSlot, sizeof(cmdAmmoSlot));
+	char cmdLeftCol[11], cmdMiddleCol[11], cmdRightCol[11];
+	GetCmdArg(2, cmdLeftCol, sizeof(cmdLeftCol));
+	GetCmdArg(3, cmdMiddleCol, sizeof(cmdMiddleCol));
+	GetCmdArg(4, cmdRightCol, sizeof(cmdRightCol));
 
-	int weaponSlot = StringToInt(cmdWeaponSlot);
-	if (0 <= weaponSlot < bp.weapons.Length)
-		bp.TakeItem(weaponSlot, WEAPON, client);
 
-	int gearSlot = StringToInt(cmdGearSlot);
-	if (0 <= gearSlot < bp.gears.Length)
-		bp.TakeItem(gearSlot, GEAR, client);
+	int leftCol = StringToInt(cmdLeftCol);
+	if (0 <= leftCol < bp.items[COL_LEFT].Length)
+	{
+		bp.TakeItem(leftCol, COL_LEFT, client);
+	}
 
-	int ammoSlot = StringToInt(cmdAmmoSlot);
-	if (0 <= ammoSlot < bp.ammos.Length)
-		bp.TakeItem(ammoSlot, AMMO, client);
+	int middleCol = StringToInt(cmdMiddleCol);
+	if (0 <= middleCol < bp.items[COL_MIDDLE].Length)
+	{
+		bp.TakeItem(middleCol, COL_MIDDLE, client);
+	}
+
+	int rightCol = StringToInt(cmdRightCol);
+	if (0 <= rightCol < bp.items[COL_RIGHT].Length)
+	{
+		bp.TakeItem(rightCol, COL_RIGHT, client);
+	}
 
 	bp.EndUse(client);
 	backpacks.SetArray(idx, bp);
@@ -1104,19 +1110,20 @@ public void OnZombieReallySpawned(int zombieRef)
 		bp.Attach(zombie, true);
 
 		// Add random loot
-		int amt = GetRandomInt(cvAmmoLootMin.IntValue, cvAmmoLootMax.IntValue);
+
+		int amt = GetRandomInt(cvLeftLootMin.IntValue, cvLeftLootMax.IntValue);
 		if (amt > 0) {
-			bp.AddRandomAmmoBoxes(amt);
+			bp.AddRandomLoot(amt, COL_LEFT);
 		}
 
-		amt = GetRandomInt(cvWeaponLootMin.IntValue, cvWeaponLootMax.IntValue);
+		amt = GetRandomInt(cvMiddleLootMin.IntValue, cvMiddleLootMax.IntValue);
 		if (amt > 0) {
-			bp.AddRandomWeapons(amt, WEAPON);
+			bp.AddRandomLoot(amt, COL_MIDDLE);
 		}
 
-		amt = GetRandomInt(cvGearLootMin.IntValue, cvGearLootMax.IntValue);
+		amt = GetRandomInt(cvRightLootMin.IntValue, cvRightLootMax.IntValue);
 		if (amt > 0) {
-			bp.AddRandomWeapons(amt, GEAR);
+			bp.AddRandomLoot(amt, COL_RIGHT);
 		}
 
 		bp.ShuffleContents();
@@ -1192,7 +1199,7 @@ void CheckAmmoBoxCollide(int ammobox)
 	static float mins[3] = {-8.0, -8.0, -8.0};
 	static float maxs[3] = {8.0, 8.0, 8.0};
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_WIP, OnAmmoBoxCollide, ammobox);
+	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_NONE, OnAmmoBoxCollide, ammobox);
 }
 
 void CheckWeaponCollide(int weapon)
@@ -1207,7 +1214,7 @@ void CheckWeaponCollide(int weapon)
 	static float mins[3] = {-8.0, -8.0, -8.0};
 	static float maxs[3] = {8.0, 8.0, 8.0};
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_WIP, OnWeaponCollide, weapon);
+	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_NONE, OnWeaponCollide, weapon);
 }
 
 bool OnAmmoBoxCollide(int collidedWith, int ammoBox)
@@ -1259,8 +1266,6 @@ bool OnWeaponCollide(int collidedWith, int weapon)
 		Item reg;
 		if (GetItemByEntity(weapon, reg))
 		{
-
-
 			int ammoAmt = GetEntProp(weapon, Prop_Send, "m_iClip1");
 
 			Backpack backpack;
@@ -1487,45 +1492,51 @@ int ParseItemRegistry(KeyValues kv)
 	do 
 	{
 		Item item;
-		
-		item.id = kv.GetNum("id", INVALID_ITEM_ID);
+	
+		item.id = kv.GetNum("id", INVALID_ITEM);
 
-		char category[20];
-		kv.GetString("category", category, sizeof(category), "none");
+		char columns[64];
+		kv.GetString("columns", columns, sizeof(columns), "");
+
+		char columnsExp[3][7];
+		ExplodeString(columns, " ", columnsExp, sizeof(columnsExp), sizeof(columnsExp[]));
+
+		for (int i; i < sizeof(columnsExp); i++) 
+		{
+			if (StrEqual(columnsExp[i], "left")) {
+				item.columns |= (1 << COL_LEFT);
+			}
+			else if (StrEqual(columnsExp[i], "middle")) {
+				item.columns |= (1 << COL_MIDDLE);
+			}
+			else if (StrEqual(columnsExp[i], "right")) {
+				item.columns |= (1 << COL_RIGHT);
+			}
+		}
 
 		char lootStr[5];
 		kv.GetString("loot", lootStr, sizeof(lootStr), "yes");
-
 		item.spawnAsLoot = !StrEqual(lootStr, "no");
 
-		if (StrEqual(category, "ammo"))
+		item.ammoID = kv.GetNum("ammo-id", INVALID_AMMO);
+
+		// If an entry has an ammo ID, we assume it to be ammo
+		if (item.ammoID != INVALID_AMMO)
 		{
-			// Ammo boxes have extra data and use model paths for their alias
-			item.category = AMMO;
-			item.ammoID = kv.GetNum("ammo-id", INVALID_AMMO_ID);
+			// Ammo boxes use model paths as their lookup key (alias)
+			item.category = CAT_AMMO;
 			item.capacity = kv.GetNum("capacity", 1);
-			kv.GetString("model", item.alias, sizeof(item.alias));
+			kv.GetString("model", item.alias, sizeof(item.alias));		
 		}
-		else
+		else 
 		{
 			kv.GetSectionName(item.alias, sizeof(item.alias));
-			if (StrEqual(category, "weapon", false)) 
-			{
-				item.category = WEAPON;
-			}
-			if (StrEqual(category, "gear", false)) 
-			{
-				item.category = GEAR;
-			}
-			else if (!category[0] || StrEqual(category, "none"))
-			{
-				item.category = NONE;
-			}
+			item.category = CAT_WEAPON;	
 		}
 
 		// if SetArray would fail, resize the array 
 		// this expects the game to use somewhat consequential IDs for weapons
-		if (item.id >= itemRegistry.Length)
+		while (item.id != itemRegistry.Length - 1)
 		{
 			// TODO: Prevent big jumps?
 			itemRegistry.Resize(item.id + 1);
@@ -1562,10 +1573,9 @@ int ParseTemplates(KeyValues kv)
 			char bpName[256];
 			kv.GetSectionName(bpName, sizeof(bpName));
 
-			template.weaponLimit = kv.GetNum("max_weapons", 8);
-			template.gearLimit = kv.GetNum("max_gear", 4);
-			template.ammoLimit = kv.GetNum("max_ammoboxes", 8);
-
+			template.itemLimit[COL_LEFT] = kv.GetNum("max_left", 8);
+			template.itemLimit[COL_MIDDLE] = kv.GetNum("max_middle", 4);
+			template.itemLimit[COL_RIGHT] = kv.GetNum("max_right", 8);
 
 			// kv.GetVector("offset", template.offset);
 			// kv.GetVector("rotation", template.rotation);
@@ -1891,14 +1901,14 @@ void SendBackpackHint(int client, const char[] hint)
 	EndMessage();
 }
 
-void GetLootOfCategory(int category, ArrayList dest)
+void GetLootForColumn(int column, ArrayList dest)
 {
 	Item reg;
 	int maxWeapons = itemRegistry.Length;
 	for (int i = 0; i < maxWeapons; i++)
 	{
 		itemRegistry.GetArray(i, reg);
-		if (reg.category == category && reg.spawnAsLoot)
+		if ((reg.columns & (1 << column)) && reg.spawnAsLoot)
 		{
 			dest.PushArray(reg);
 		}
