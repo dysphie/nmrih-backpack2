@@ -7,6 +7,7 @@ This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/s
 - No gamedata dependency, the plugin should be less prone to breaking on new updates
 - DHooks is no longer required
 - Zombies can spawn with backpacks. The backpacks can contain loot.
+- Configurable placement overrides, dictactes which columns items can end up in
 - Backpacks can be made to blink instead of glow
 - Less edicts. Backpacks consume 1 entity when created instead of 2 or 3
 - No conflicts with NMS. Backpacks no longer prevent supply choppers from spawning
