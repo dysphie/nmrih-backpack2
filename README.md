@@ -28,7 +28,7 @@ You can configure backpack types, behavior and appareance in `addons/sourcemod/c
 - `itembox_model` - Model to use on dropped backpacks.
 - `ornament_model`  - Model to render on the player's back
 - `sounds` - Sound effects used by this backpack, see config for examples
-- `noloot` - Add this to weapon entries to prevent them from being spawned as loot
+- `loot` `yes/no` - For weapon registry entries, if set to no, prevents them from being spawned as loot
 	
 ## Cvars
 
