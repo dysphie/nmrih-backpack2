@@ -82,7 +82,7 @@ Keys not mentioned here should be left as-is unless you know what you're doing, 
 	"item_pills"
 	{
 		"id" "44"
-		"columns" "ammo"
+		"columns" "right"
 	}
 
 	// Allow hammer to overflow into the "gear" column if the "weapon" column is full
