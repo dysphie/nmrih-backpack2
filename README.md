@@ -35,9 +35,11 @@ You can configure backpack types, behavior and appareance in `addons/sourcemod/c
 	"Giraffe Plushie"
 	{
 		"ornament_model" "models/survival/item_dufflebag_backpack.mdl"
-
+		
+		// Custom physics model
 		"itembox_model" "models/anxiety/giraffe.mdl"
-
+	
+		// Play Pugman's bleeding sounds
 		"sounds"
 		{
 			"backpack_open"
@@ -47,10 +49,11 @@ You can configure backpack types, behavior and appareance in `addons/sourcemod/c
 				"player/bleed/pugman/bleeding04.wav" "1"
 			}
 		}
-
-		"max_left"		"4"
-		"max_middle"	"2"
-		"max_right"		"4"
+		
+		// Half the capacity of a normal backpack
+		"max_left" "4"
+		"max_middle" "2"
+		"max_right" "4"
 	}
 	```
 
