@@ -28,6 +28,8 @@ You can configure backpack types, behavior and appareance in `addons/sourcemod/c
 - `itembox_model` - Model to use on dropped backpacks.
 - `ornament_model`  - Model to render on the player's back
 - `sounds` - Sound effects used by this backpack, see config for examples
+- `max_weapons [0-8]`, `max_gear [0-4]`, `max_ammoboxes [0-8]` - Size limits of the backpack
+- `loot` `yes/no` - For weapon registry entries, if set to no, prevents them from being spawned as loot
 	
 ## Cvars
 
