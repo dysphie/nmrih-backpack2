@@ -1,4 +1,4 @@
-# [NMRiH] Backpack2
+# [NMRiH] Backpack 2
 This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/showthread.php?t=308217) with added features and bug fixes.
 
 It adds portable inventory boxes to the game. They function just like normal inventory boxes except they also pick up items that are dropped on top of them. Punching one will place it on your back and allow you to carry it around the level.
