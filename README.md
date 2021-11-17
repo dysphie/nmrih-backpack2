@@ -1,7 +1,22 @@
 # [NMRiH] Backpack2
 This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/showthread.php?t=308217) with added features and bug fixes.
 
-## What's new
+It adds portable inventory boxes to the game. They function just like normal inventory boxes except they also pick up items that are dropped on top of them. Punching one will place it on your back and allow you to carry it around the level.
+
+Backpacks are able to store more ammo than a regular inventory box. By default backpacks store up to 4 boxes worth of ammo per slot. This means one slot holds 4 barricade boards or 40 rounds of 9mm or 80 rounds of .22.
+
+Backpacks are randomly colored to help distinguish them.
+
+# Video
+https://user-images.githubusercontent.com/11559683/142296315-f216a804-92b9-4bff-bbfd-e247b86dc9d1.mp4
+
+# Using backpacks
+- Punch backpack to wear it
+- Press drop weapon key when fists are equipped to drop it
+- Press use on a dropped backpack to access its inventory
+- Drop items on top of the backpack to store them inside
+
+## What's new in 2.0
 
 - NMRiH 1.12.1 support
 - No gamedata dependency, the plugin should be less prone to breaking on new updates
@@ -14,9 +29,8 @@ This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/s
 - Toggleable screen hints for carrying/using backpacks
 - Fixed items colliding with the player when dropped
 
-## What's missing
 
-These features are currently unavailable, though I plan on adding them
+Some old features are currently unavailable, though I plan on adding them
 
 - Speed penalties for backpack carrier
 - Backpack settings: `weight`, `admin_can_use`, `admin_can_wear`, `zombie_can_wear`, `colorize`
