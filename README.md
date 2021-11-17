@@ -7,10 +7,10 @@ Backpacks are able to store more ammo than a regular inventory box. By default b
 
 Backpacks are randomly colored to help distinguish them.
 
-# Video
+## Video
 https://user-images.githubusercontent.com/11559683/142296315-f216a804-92b9-4bff-bbfd-e247b86dc9d1.mp4
 
-# Using backpacks
+## Using backpacks
 - Punch backpack to wear it
 - Press drop weapon key when fists are equipped to drop it
 - Press use on a dropped backpack to access its inventory
