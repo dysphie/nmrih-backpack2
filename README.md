@@ -16,7 +16,7 @@ https://user-images.githubusercontent.com/11559683/142296315-f216a804-92b9-4bff-
 # Installation:
 - Grab the latest ZIP files from [releases](https://github.com/dysphie/nmrih-backpack2/releases)
 - Extract `nmrih-backpack-X.Y.Z.zip` into the server's `nmrih/addons/sourcemod` directory
-- Extract the contents of `nmrih-backpack-assets.zip` into your game server and your FastDL server
+- Extract `nmrih-backpack-assets.zip` into your game server and your FastDL server (they're automatically added to the downloads table)
 	
 ## Using backpacks
 - Punch backpack to wear it
