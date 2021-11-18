@@ -10,6 +10,14 @@ Backpacks are randomly colored to help distinguish them.
 ## Video
 https://user-images.githubusercontent.com/11559683/142296315-f216a804-92b9-4bff-bbfd-e247b86dc9d1.mp4
 
+# Requirements
+- A server capable of serving custom files to clients (FastDL)
+
+# Installation:
+- Grab the latest ZIP files from [releases](https://github.com/dysphie/nmrih-backpack2/releases)
+- Extract `nmrih-backpack-X.Y.Z.zip` into the server's `nmrih/addons/sourcemod` directory
+- Extract the contents of `nmrih-backpack-assets.zip` into your game server and your FastDL server
+	
 ## Using backpacks
 - Punch backpack to wear it
 - Press drop weapon key when fists are equipped to drop it
