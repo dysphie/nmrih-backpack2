@@ -63,10 +63,10 @@ enum
 
 public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
-	author      = "Dysphie",
+	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.1",
-	url         = ""
+	version     = "2.0.2",
+	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
 bool optimize;
@@ -228,66 +228,6 @@ enum struct Backpack
 		}
 	}
 
-	void AddRandomLoot(int count, int column)
-	{
-		// Get candidate weapons
-		ArrayList loot = new ArrayList(sizeof(Item));
-		GetLootForColumn(column, loot); // FIXME
-
-		int numLoot = loot.Length;
-		if (numLoot <= 0) 
-		{
-			delete loot;
-			return;
-		}
-
-		// For each available slot, get a random weapon and ammo count
-		for (int i; i < count; i++)
-		{
-			int rnd = GetRandomInt(0, numLoot - 1);    
-
-			Item reg;
-			loot.GetArray(rnd, reg);
-
-			if (reg.category == CAT_WEAPON)
-			{
-				int weapon = CreateEntityByName(reg.alias);
-				DispatchSpawn(weapon);
-
-				int rndClip = 1;
-				int maxClip = GetMaxClip1(weapon);
-				if (maxClip != -1)
-				{
-					int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
-					int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
-					rndClip = GetRandomInt(min, max);	
-				}
-
-				// if we couldn't fit this, backpack is full, stop
-				// TODO: Is it?
-				if (this.AddItem(rndClip, reg, true) != 0) {
-					break;
-				}
-
-				RemoveEntity(weapon);
-			}
-			else if (reg.category == CAT_AMMO)
-			{
-				int minAmmo = reg.capacity * cvAmmoLootMinPct.IntValue / 100;
-				if (minAmmo < 1) { 
-					minAmmo = 1; 
-				}
-
-				int maxAmmo = reg.capacity * cvAmmoLootMaxPct.IntValue / 100;
-				int rndClip = GetRandomInt(minAmmo, maxAmmo);
-
-				this.AddItem(rndClip, reg, true, false);
-			}
-		}
-
-		delete loot;
-	}
-
 	void HighlightEntity(int entity)
 	{
 		int glowType = cvGlowType.IntValue;
@@ -435,12 +375,18 @@ enum struct Backpack
 		FreezePlayer(client);
 		this.PlaySound(SoundOpen);
 
+		// HACK: Remove hints, we should really do this somewhere else
+		if (cvHints.BoolValue && ClientWantsHints(client))
+		{
+			SendBackpackHint(client, "");
+			nextHintTime[client] = GetTickedTime() + 999999.9;
+		}
+
 		Handle msg = StartMessageOne("ItemBoxOpen", client, USERMSG_RELIABLE|USERMSG_BLOCKHOOKS);
 		BfWrite bf = UserMessageToBfWrite(msg);
 		bf.WriteShort(dropped);
 
 		// Describe every cell in the inventory box
-
 		int expected[] = { 8, 4, 8 };
 
 		for (int k = 0; k < COL_MAX; k++)
@@ -477,68 +423,142 @@ enum struct Backpack
 
 	void EndUse(int client)
 	{
+		// HACK: Re enable hints
+		nextHintTime[client] = GetTickedTime();
+		wasLookingAtBackpack[client] = false;
+
 		UnfreezePlayer(client);
 		this.atInterface[client] = false;
 		UserMsg_EndUse(client);
 	}
 
-	int AddItem(int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
+	bool AddWeapon(int ammoCount, Item reg, bool suppressSound = false)
+	{
+		for (int i; i < COL_MAX; i++) 
+		{
+			if (reg.columns & (1 << i) 
+				&& this.AddWeaponToColumn(i, ammoCount, reg, suppressSound))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool AddWeaponToColumn(int col, int ammoCount, Item reg, bool suppressSound = false)
+	{
+		ArrayList arr = this.items[col];
+		int maxItems = arr.Length;
+
+		for (int i = 0; i < maxItems; i++)
+		{
+			StoredItem stored;
+			arr.GetArray(i, stored);
+
+			if (stored.id == INVALID_ITEM)
+			{
+				stored.id = reg.id;
+				stored.ammoCount = ammoCount;
+				
+				if (!suppressSound) {
+					this.PlaySound(SoundAdd);
+				}
+
+				arr.SetArray(i, stored);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	int AddAmmo(int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
 	{
 		int leftover = ammoCount;
 
-		for (int i; i < COL_MAX; i++) {
-			if (leftover > 0 && (reg.columns & (1 << i))) {
-				leftover = this.AddItemToColumn(i, ammoCount, reg, suppressSound, allowStacking);
+		int i = 0;
+		while (leftover > 0 && i < COL_MAX)
+		{
+			if (reg.columns & (1 << i))
+			{
+				leftover = this.AddAmmoToColumn(i, leftover, reg, suppressSound);
 			}
+			i++;
+		}
+		return leftover;
+	}
+
+	int AddAmmoToColumn(int col, int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
+	{
+		ArrayList arr = this.items[col];
+
+		int fullCapacity = RoundToNearest(reg.capacity * cvAmmoMultiplier.FloatValue);
+		if (fullCapacity <= 0) {
+			fullCapacity = cellmax;
+		}
+		
+		int leftover = this.AddAmmoRecursively(arr, reg.id, ammoCount, fullCapacity, allowStacking);
+
+		if (!suppressSound && leftover < ammoCount) {
+			this.PlaySound(SoundAdd);
 		}
 
 		return leftover;
 	}
 
-	int AddItemToColumn(int col, int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
+	void AddRandomLoot(int count, int column)
 	{
-		ArrayList arr = this.items[col];
+		// Get candidate weapons
+		ArrayList loot = new ArrayList(sizeof(Item));
+		GetLootForColumn(column, loot); // FIXME
 
-		if (reg.category == CAT_WEAPON)
+		int numLoot = loot.Length;
+		if (numLoot <= 0) 
 		{
-			int maxItems = arr.Length;
+			delete loot;
+			return;
+		}
 
-			for (int i = 0; i < maxItems; i++)
+		// For each available slot, get a random weapon and ammo count
+		for (int i; i < count; i++)
+		{
+			int rnd = GetRandomInt(0, numLoot - 1);    
+
+			Item reg;
+			loot.GetArray(rnd, reg);
+
+			if (reg.category == CAT_WEAPON)
 			{
-				StoredItem stored;
-				arr.GetArray(i, stored);
+				int weapon = CreateEntityByName(reg.alias);
+				DispatchSpawn(weapon);
 
-				if (stored.id == INVALID_ITEM)
+				int rndClip = 1;
+				int maxClip = GetMaxClip1(weapon);
+				if (maxClip != -1)
 				{
-					stored.id = reg.id;
-					stored.ammoCount = ammoCount;
-					
-					if (!suppressSound) {
-						this.PlaySound(SoundAdd);
-					}
-
-					arr.SetArray(i, stored);
-					return 0;
+					int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
+					int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
+					rndClip = GetRandomInt(min, max);	
 				}
-			}	
-		}
-		else if (reg.category == CAT_AMMO)
-		{
-			int fullCapacity = RoundToNearest(reg.capacity * cvAmmoMultiplier.FloatValue);
-			if (fullCapacity <= 0) {
-				fullCapacity = cellmax;
+
+				if (this.AddWeaponToColumn(column, rndClip, reg, true))
+				{
+					RemoveEntity(weapon);	
+				}
 			}
-			
-			int leftover = this.AddAmmoRecursively(arr, reg.id, ammoCount, fullCapacity, allowStacking);
+			else if (reg.category == CAT_AMMO)
+			{
+				int minAmmo = reg.capacity * cvAmmoLootMinPct.IntValue / 100;
+				if (minAmmo < 1) { 
+					minAmmo = 1; 
+				}
 
-			if (!suppressSound && leftover < ammoCount) {
-				this.PlaySound(SoundAdd);
+				int maxAmmo = reg.capacity * cvAmmoLootMaxPct.IntValue / 100;
+				int rndClip = GetRandomInt(minAmmo, maxAmmo);
+				this.AddAmmoToColumn(column, rndClip, reg, true, false);
 			}
-
-			return leftover;
 		}
 
-		return ammoCount;
+		delete loot;
 	}
 
 	int AddAmmoRecursively(ArrayList arr, int itemID, int curAmmo, int maxAmmo, bool allowStacking = true)
@@ -766,6 +786,7 @@ void GetRandomRGB(int rgb[3])
 public void OnClientPutInServer(int client)
 {
 	SDKHook(client, SDKHook_WeaponDropPost, OnWeaponDropped);
+	SDKHook(client, SDKHook_WeaponSwitch, OnWeaponSwitch);
 }
 
 public void OnPluginStart()
@@ -1151,6 +1172,30 @@ void OnWeaponDropped(int client, int weapon)
 	CreateTimer(0.0, OnWeaponFallThink, EntIndexToEntRef(weapon), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
+// HACK: Remove "Drop backpack hint" if client is switching away from fists with a backpack
+// I'm gonna tweak this to not use a switch hook later
+Action OnWeaponSwitch(int client, int weapon)
+{
+	if (0 < client <= MaxClients && wearingBackpack[client] && 
+		cvHints.BoolValue && ClientWantsHints(client)) 
+	{
+		int curWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+		if (curWeapon != -1)
+		{
+			char classname[15];
+			GetEntityClassname(curWeapon, classname, sizeof(classname));
+
+			if (StrEqual(classname, "me_fists"))
+			{
+				SendBackpackHint(client, "");
+			}
+		}	
+	}
+
+	return Plugin_Continue;
+}
+
+
 Action OnAmmoFallThink(Handle timer, int ammoRef)
 // void OnAmmoFallThink(int ammoRef)
 {
@@ -1234,7 +1279,7 @@ bool OnAmmoBoxCollide(int collidedWith, int ammoBox)
 		}
 
 		int ammoCount = GetEntProp(ammoBox, Prop_Data, "m_iAmmoCount");
-		int leftover = bp.AddItem(ammoCount, reg);
+		int leftover = bp.AddAmmo(ammoCount, reg);
 
 		if (leftover < ammoCount) 
 		{
@@ -1271,7 +1316,7 @@ bool OnWeaponCollide(int collidedWith, int weapon)
 			Backpack backpack;
 			backpacks.GetArray(backpackID, backpack);
 			
-			if (backpack.AddItem(ammoAmt, reg) == 0) 
+			if (backpack.AddWeapon(ammoAmt, reg)) 
 			{
 				RemoveEntity(weapon);
 				backpacks.SetArray(backpackID, backpack);
@@ -1325,7 +1370,7 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 
 				if (StrEqual(classname, "me_fists"))
 				{
-					SendBackpackHint(client, "[G] Drop backpack");
+					SendBackpackHint(client, "%T", "Hint You Can Drop", client);
 				}
 			}
 		}
@@ -1334,7 +1379,7 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 		{
 			if (!wasLookingAtBackpack[client]) 
 			{
-				SendBackpackHint(client, "[PUNCH] Equip backpack\n\n[E] Open backpack");
+				SendBackpackHint(client, "%T", "Hint You Can Pick Up", client);
 			}
 
 			wasLookingAtBackpack[client] = true;
@@ -1892,12 +1937,15 @@ public bool TraceFilter_IgnoreOne(int entity, int contentMask, int ignore)
 	return entity != ignore;
 }
 
-void SendBackpackHint(int client, const char[] hint)
+void SendBackpackHint(int client, const char[] format, any ...)
 {
+	char buffer[255];
+	VFormat(buffer, sizeof(buffer), format, 3);
+
 	Handle msg = StartMessageOne("KeyHintText", client, USERMSG_BLOCKHOOKS);
 	BfWrite bf = UserMessageToBfWrite(msg);
 	bf.WriteByte(1); // number of strings, only 1 is accepted
-	bf.WriteString(hint);
+	bf.WriteString(buffer);
 	EndMessage();
 }
 
