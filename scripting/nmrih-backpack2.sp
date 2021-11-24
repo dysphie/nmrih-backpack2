@@ -65,11 +65,12 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.3",
+	version     = "2.0.4",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
 bool optimize;
+bool fixUpBoards;
 
 ConVar cvOptimize;
 ConVar cvHints;
@@ -395,7 +396,16 @@ enum struct Backpack
 			int max = this.items[k].Length;
 			for (; i < max; i++)
 			{
-				bf.WriteShort(this.items[k].Get(i, StoredItem::id));
+				int id = this.items[k].Get(i, StoredItem::id);
+
+				// HACKHACK: Replace boards with the barricade hammer in the user msg
+				// as clients are unable to render board entries in 1.12.1
+				// https://github.com/nmrih/source-game/issues/1256
+				if (fixUpBoards && id == 61) {
+					id = 23;
+				}
+
+				bf.WriteShort(id);
 			}
 
 			// Our columns might be smaller than the game expects due
@@ -794,6 +804,18 @@ public void OnPluginStart()
 {
 	LoadTranslations("backpack2.phrases");
 	LoadTranslations("common.phrases");
+
+	ConVar cvGameVersion = FindConVar("nmrih_version");
+	if (cvGameVersion)
+	{
+		char gameVersion[32];
+		cvGameVersion.GetString(gameVersion, sizeof(gameVersion));
+
+		if (StrEqual(gameVersion, "1.12.0") || StrEqual(gameVersion, "1.12.1"))
+		{
+			fixUpBoards = true;
+		} 
+	}
 
 	hintCookie = new Cookie("backpack2_hints", "Toggles Backpack2 screen hints", CookieAccess_Protected);
 
