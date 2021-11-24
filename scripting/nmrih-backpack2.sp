@@ -65,7 +65,7 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.2",
+	version     = "2.0.3",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
@@ -730,9 +730,10 @@ enum struct Backpack
 			if (stored.ammoCount <= 0)
 			{
 				stored.id = INVALID_ITEM;
-				this.items[column].SetArray(index, stored);
 				this.TakeItemUpdate(index, column);
 			}
+
+			this.items[column].SetArray(index, stored);
 		}
 
 		return true;
