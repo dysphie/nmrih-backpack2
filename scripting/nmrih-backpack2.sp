@@ -65,7 +65,7 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.4",
+	version     = "2.0.5",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
@@ -978,6 +978,11 @@ public Action Cmd_Backpack(int client, int args)
 
 Action Cmd_CloseBox(int client, const char[] command, int argc)
 {
+	if (!IsValidPlayer(client))
+	{
+		return Plugin_Continue;
+	}
+
 	char cmdIndex[11];
 	GetCmdArg(1, cmdIndex, sizeof(cmdIndex));
 	int index = StringToInt(cmdIndex);
@@ -999,6 +1004,11 @@ Action Cmd_CloseBox(int client, const char[] command, int argc)
 
 Action Cmd_TakeItems(int client, const char[] command, int argc)
 {
+	if (!IsValidPlayer(client))
+	{
+		return Plugin_Continue;
+	}
+
 	char cmdIndex[11];
 	GetCmdArg(1, cmdIndex, sizeof(cmdIndex));
 	int index = StringToInt(cmdIndex);
@@ -1762,8 +1772,12 @@ float GetCarriedWeight(int client)
 
 Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& damage, int& damagetype)
 {
-	if ((damagetype & DMG_CLUB || damagetype & DMG_SLASH) && IsValidPlayer(attacker) && 
-		!wearingBackpack[attacker] && IsValidEntity(inflictor) && CanReachBackpack(attacker, backpack))
+	if ((damagetype & DMG_CLUB || damagetype & DMG_SLASH) && 
+		IsValidPlayer(attacker) && 
+		!wearingBackpack[attacker] && 
+		IsValidEntity(inflictor) && 
+		HasEntProp(inflictor, Prop_Send, "m_hOwner") && 
+		CanReachBackpack(attacker, backpack))
 	{
 		int owner = GetEntPropEnt(inflictor, Prop_Send, "m_hOwner");
 		if (owner == attacker)
