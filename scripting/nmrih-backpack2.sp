@@ -9,21 +9,12 @@
 
 // FIXME: Item trace hulls are not clipped
 // FIXME: Zombies can drop weapons at 0 0 0 when they receive a backpack
-// FIXME: Sanity checks everywhere!
-// TODO: Ensure players can't get stuck in the supply crate interface
 // TODO: Glow backpacks when obj items are added to them, and restore targetnames
-// TODO: Dont show hints while at interface
-
-// TODO: TakeItem update might be off now that categories and cols are different
 
 #define PLUGIN_PREFIX "[Backpack2] "
 
-
 #define MASK_NONE 0
-
 #define INVALID_USER_ID 0
-
-#define DEBUG
 
 #define TEMPLATE_RANDOM -1
 
@@ -65,7 +56,7 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.5",
+	version     = "2.0.6",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
@@ -519,7 +510,7 @@ enum struct Backpack
 	{
 		// Get candidate weapons
 		ArrayList loot = new ArrayList(sizeof(Item));
-		GetLootForColumn(column, loot); // FIXME
+		GetLootForColumn(column, loot);
 
 		int numLoot = loot.Length;
 		if (numLoot <= 0) 
@@ -758,8 +749,11 @@ enum struct Backpack
 	{
 		this.EndUseForAll();
 
-		if (!IsValidEntity(this.wearerRef)) {
+		int wearer = EntRefToEntIndex(this.wearerRef);
+		if (wearer == -1) {
 			numDroppedBackpacks--;
+		} else {
+			wearingBackpack[wearer] = false;
 		}
 
 		int dropped = EntRefToEntIndex(this.propRef);
@@ -1262,8 +1256,6 @@ Action OnWeaponFallThink(Handle timer, int weaponRef)
 		return Plugin_Stop;
 	}
 }
-
-#define EFL_NO_THINK_FUNCTION (1 << 22)
 
 void CheckAmmoBoxCollide(int ammobox)
 {
