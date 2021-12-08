@@ -1,0 +1,51 @@
+"Phrases"
+{
+	"Backpack Settings"
+	{
+		"ru"	"Настройки рюкзака"
+	}
+	"Hints Enabled"
+	{
+		"ru"	"Показать подсказки: ВКЛ"
+	}
+
+	"Hints Disabled"
+	{
+		"ru"	"Показать подсказки: ВЫКЛ"
+	}	
+
+	"Hint You Can Drop"
+	{
+		"ru"	"[G] Сбросить рюкзак"
+	}
+
+	"Hint You Can Pick Up"
+	{
+		"ru"	"[УДАРЬ] Надеть рюкзак\n\n[E] Открыть рюкзак"
+	}
+
+	"Give Backpack Success"
+	{
+		"ru" "Дать {1} рюкзак"
+	}
+
+	"Give Backpack Already Owns"
+	{
+		"ru" "У {1} уже есть рюкзак"
+	}
+
+	"Already Own This Type"
+	{
+		"ru" "У вас уже есть предмет такого типа!"
+	}
+
+	"No Inventory Space"
+	{
+		"ru" "Мало места для этого предмета!"
+	}
+
+	"Invalid Drop Position"
+	{
+		"ru"	"Рюкзак не может быть сброшен здесь"
+	}
+}
