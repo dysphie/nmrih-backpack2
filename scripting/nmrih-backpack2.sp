@@ -336,10 +336,10 @@ enum struct Backpack
 		this.wearerRef = INVALID_ENT_REFERENCE;
 		this.PlaySound(SoundDrop);
 
-		if (ClientWantsHints(client))
+		if (ClientWantsHints(wearer))
 		{
-			SendBackpackHint(client, "");
-			nextHintTime[client] = GetTickedTime() + 2.0;
+			SendBackpackHint(wearer, "");
+			nextHintTime[wearer] = GetTickedTime() + 2.0;
 		}
 
 		return true;
