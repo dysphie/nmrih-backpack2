@@ -56,7 +56,7 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.6",
+	version     = "2.0.7",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
@@ -335,6 +335,13 @@ enum struct Backpack
 		wearingBackpack[wearer] = false;
 		this.wearerRef = INVALID_ENT_REFERENCE;
 		this.PlaySound(SoundDrop);
+
+		if (ClientWantsHints(client))
+		{
+			SendBackpackHint(client, "");
+			nextHintTime[client] = GetTickedTime() + 2.0;
+		}
+
 		return true;
 	}
 
@@ -367,8 +374,7 @@ enum struct Backpack
 		FreezePlayer(client);
 		this.PlaySound(SoundOpen);
 
-		// HACK: Remove hints, we should really do this somewhere else
-		if (cvHints.BoolValue && ClientWantsHints(client))
+		if (ClientWantsHints(client))
 		{
 			SendBackpackHint(client, "");
 			nextHintTime[client] = GetTickedTime() + 999999.9;
@@ -1085,13 +1091,13 @@ void PrecacheAssets()
 		if (template.droppedMdl[0])
 		{
 			PrecacheModel(template.droppedMdl);
-			AddFileToDownloadsTable(template.droppedMdl);
+			AddModelToDownloadsTable(template.droppedMdl);
 		}
 		
 		if (template.attachMdl[0])
 		{
 			PrecacheModel(template.attachMdl);
-			AddFileToDownloadsTable(template.attachMdl);
+			AddModelToDownloadsTable(template.attachMdl);
 		}
 
 		for (int i = 0; i < sizeof(template.sounds); i++)
@@ -1113,6 +1119,28 @@ void PrecacheAssets()
 			}
 		}
 	}
+}
+
+void AddModelToDownloadsTable(const char[] model_name)
+{
+    AddFileToDownloadsTable(model_name);
+
+    static const char MDL_EXT[] = ".mdl";
+
+    char buffer[PLATFORM_MAX_PATH];
+    int len = strcopy(buffer, sizeof(buffer), model_name) - (sizeof(MDL_EXT) - 1);
+
+    strcopy(buffer[len], sizeof(buffer) - len, ".dx80.vtx");
+    AddFileToDownloadsTable(buffer);
+
+    strcopy(buffer[len], sizeof(buffer) - len, ".dx90.vtx");
+    AddFileToDownloadsTable(buffer);
+
+    strcopy(buffer[len], sizeof(buffer) - len, ".sw.vtx");
+    AddFileToDownloadsTable(buffer);
+
+    strcopy(buffer[len], sizeof(buffer) - len, ".vvd");
+    AddFileToDownloadsTable(buffer);
 }
 
 public void OnEntityCreated(int entity, const char[] classname)
@@ -1203,8 +1231,7 @@ void OnWeaponDropped(int client, int weapon)
 // I'm gonna tweak this to not use a switch hook later
 Action OnWeaponSwitch(int client, int weapon)
 {
-	if (0 < client <= MaxClients && wearingBackpack[client] && 
-		cvHints.BoolValue && ClientWantsHints(client)) 
+	if (0 < client <= MaxClients && wearingBackpack[client] && ClientWantsHints(client)) 
 	{
 		int curWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
 		if (curWeapon != -1)
@@ -1368,7 +1395,6 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 			{
 				ClientDropBackpack(client);
 				
-				// TODO: This probably shouldn't be here
 				if (ClientWantsHints(client)) {
 					SendBackpackHint(client, "");
 				}
@@ -1376,7 +1402,7 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 		}
 	}
 
-	else if (cvHints.BoolValue && ClientWantsHints(client))
+	else if (ClientWantsHints(client))
 	{
 		float curTime = GetTickedTime();
 		if (curTime < nextHintTime[client]) {
@@ -1400,7 +1426,7 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 			}
 		}
 
-		else if (IsLookingAtBackpack(client))
+		else if (NMRiH_IsPlayerAlive(client) && IsLookingAtBackpack(client))
 		{
 			if (!wasLookingAtBackpack[client]) 
 			{
@@ -1421,6 +1447,11 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3
 
 bool ClientWantsHints(int client)
 {
+	if (!cvHints.BoolValue)
+	{
+		return false;
+	}
+
 	if (AreClientCookiesCached(client))
 	{
 		char value[11];
