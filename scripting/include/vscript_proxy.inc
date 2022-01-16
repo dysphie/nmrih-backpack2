@@ -1,7 +1,43 @@
 #include <sdktools>
 
+/* Runs a VScript function with void return
+ * 
+ * @param proxy			Reference to logic_script_proxy entity
+ * @param entity		Entity to run the function on
+ * @param format		VScript function to run
+ * @param ...			VScript function format parameters 
+ * @noreturn
+ * @error Invalid entity. Failure to create VScript proxy. Non-int return
+ */
+stock void RunEntVScript(int proxy, int entity, const char[] format, any ...)
+{
+	if (!IsValidEntity(proxy)) {
+		ThrowError("Invalid script proxy (%d)", proxy);
+	}
+	
+	int index = EntRefToEntIndex(entity);
+	if (index == -1) {
+		ThrowError("Entity %d (%d) is invalid", index, entity);
+	}
+
+	SetVariantString("!activator");
+	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
+
+	char temp[1024];
+	VFormat(temp, sizeof(temp), format, 5);
+
+	SetVariantString(temp);
+	AcceptEntityInput(proxy, "RunFunction", entity, entity);
+
+	bool bFailure = (GetEntProp(proxy, Prop_Data, "m_bError") != 0) ? true : false;
+	if (bFailure) {
+		ThrowError("VScript proxy failed");
+	}
+}
+
 /* Runs a VScript function that returns a string
  * 
+ * @param proxy			Reference to logic_script_proxy entity
  * @param entity		Entity to run the function on
  * @param buffer		String buffer to store result
  * @param maxlen		Buffer size
@@ -10,184 +46,142 @@
  * @return              Number of non-null bytes written.
  * @error Invalid entity. Failure to create VScript proxy.
  */
-stock int RunEntVScriptString(int entity, char[] buffer, int maxlen, const char[] format, any ...)
+stock int RunEntVScriptString(int proxy, int entity, char[] buffer, int maxlen, const char[] format, any ...)
 {
+	if (!IsValidEntity(proxy)) {
+		ThrowError("Invalid script proxy (%d)", proxy);
+	}
+	
 	int index = EntRefToEntIndex(entity);
 	if (index == -1) {
 		ThrowError("Entity %d (%d) is invalid", index, entity);
 	}
 
-	char original[64];
-	GetEntPropString(index, Prop_Send, "m_iName", original, sizeof(original));
+	SetVariantString("!activator");
+	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
 	VFormat(temp, sizeof(temp), format, 5);
-	Format(temp, sizeof(temp), "self.SetName(self.%s)", temp);
 
 	SetVariantString(temp);
-	AcceptEntityInput(index, "RunScriptCode", index, index);
-
-	int bytes = GetEntPropString(index, Prop_Send, "m_iName", buffer, maxlen);
-	SetEntPropString(index, Prop_Send, "m_iName", original);
+	AcceptEntityInput(proxy, "RunFunctionString", entity, entity);
+	
+	bool bFailure = (GetEntProp(proxy, Prop_Data, "m_bError") != 0) ? true : false;
+	if (bFailure) {
+		ThrowError("VScript proxy failed");
+	}
+	
+	int bytes = GetEntPropString(proxy, Prop_Data, "m_iszReturnValue", buffer, maxlen);
 	return bytes;
+}
+
+/* Runs a VScript function that returns an int
+ * 
+ * @param proxy			Reference to logic_script_proxy entity
+ * @param entity		Entity to run the function on
+ * @param format		VScript function to run
+ * @param ...			VScript function format parameters
+ * @return              VScript function return
+ * @error Invalid entity. Failure to create VScript proxy. Non-int return
+ */
+stock int RunEntVScriptInt(int proxy, int entity, const char[] format, any ...)
+{
+	if (!IsValidEntity(proxy)) {
+		ThrowError("Invalid script proxy (%d)", proxy);
+	}
+	
+	int index = EntRefToEntIndex(entity);
+	if (index == -1) {
+		ThrowError("Entity %d (%d) is invalid", index, entity);
+	}
+
+	SetVariantString("!activator");
+	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
+
+	char temp[1024];
+	VFormat(temp, sizeof(temp), format, 3);
+
+	SetVariantString(temp);
+	AcceptEntityInput(proxy, "RunFunctionInt", entity, entity);
+	
+	bool bFailure = (GetEntProp(proxy, Prop_Data, "m_bError") != 0) ? true : false;
+	if (bFailure) {
+		ThrowError("VScript proxy failed");
+	}
+	
+	return GetEntProp(proxy, Prop_Data, "m_iReturnValue");
 }
 
 /* Runs a VScript function that returns a float
  * 
+ * @param proxy			Reference to logic_script_proxy entity
  * @param entity		Entity to run the function on
  * @param format		VScript function to run
  * @param ...			VScript function format parameters
  * @return              VScript function return
  * @error Invalid entity. Failure to create VScript proxy. Non-float return
  */
-stock float RunEntVScriptFloat(int entity, const char[] format, any ...)
+stock float RunEntVScriptFloat(int proxy, int entity, const char[] format, any ...)
 {
+	if (!IsValidEntity(proxy)) {
+		ThrowError("Invalid script proxy (%d)", proxy);
+	}
+	
 	int index = EntRefToEntIndex(entity);
 	if (index == -1) {
 		ThrowError("Entity %d (%d) is invalid", index, entity);
 	}
 
-	char original[64];
-	GetEntPropString(index, Prop_Send, "m_iName", original, sizeof(original));
+	SetVariantString("!activator");
+	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
 	VFormat(temp, sizeof(temp), format, 3);
-	Format(temp, sizeof(temp), "self.SetName(self.%s.tostring())", temp);
 
 	SetVariantString(temp);
-	AcceptEntityInput(index, "RunScriptCode", index, index);
-
-	int len = GetEntPropString(index, Prop_Send, "m_iName", temp, sizeof(temp));
-	SetEntPropString(index, Prop_Send, "m_iName", original);
-
-	if (len > 0)
-	{
-		float result;
-		if (StringToFloatEx(temp, result) == len) {
-			return result;
-		}
+	AcceptEntityInput(proxy, "RunFunctionFloat", entity, entity);
+	
+	bool bFailure = (GetEntProp(proxy, Prop_Data, "m_bError") != 0) ? true : false;
+	if (bFailure) {
+		ThrowError("VScript proxy failed");
 	}
-
-	ThrowError("Bad function return. Expected int, got \"%s\" (%d bytes)", temp, len);
-	return 0.0;
-}
-
-/* Runs a VScript function that returns an int
- * 
- * @param entity		Entity to run the function on
- * @param format		VScript function to run
- * @param ...			VScript function format parameters
- * @return              VScript function return
- * @error Invalid entity. Failure to create VScript proxy. Non-int return
- */
-stock int RunEntVScriptInt(int entity, const char[] format, any ...)
-{
-	int index = EntRefToEntIndex(entity);
-	if (index == -1) {
-		ThrowError("Entity %d (%d) is invalid", index, entity);
-	}
-
-	char original[64];
-	GetEntPropString(index, Prop_Send, "m_iName", original, sizeof(original));
-
-	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 3);
-	Format(temp, sizeof(temp), "self.SetName(self.%s.tostring())", temp);
-
-	SetVariantString(temp);
-	AcceptEntityInput(index, "RunScriptCode", index, index);
-
-	int len = GetEntPropString(index, Prop_Send, "m_iName", temp, sizeof(temp));
-	SetEntPropString(index, Prop_Send, "m_iName", original);
-
-	if (len > 0)
-	{
-		int result;
-		if (StringToIntEx(temp, result) == len) {
-			return result;
-		}
-	}
-
-	ThrowError("Bad function return. Expected int, got \"%s\" (%d bytes)", temp, len);
-	return 0;
-}
-
-/* Runs a VScript function with void return
- * 
- * @param entity		Entity to run the function on
- * @param format		VScript function to run
- * @param ...			VScript function format parameters 
- * @noreturn
- * @error Invalid entity. Failure to create VScript proxy. Non-int return
- */
-stock void RunEntVScript(int entity, const char[] format, any ...)
-{
-	int index = EntRefToEntIndex(entity);
-	if (index == -1) {
-		ThrowError("Entity %d (%d) is invalid", index, entity);
-	}
-
-	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 3);
-	Format(temp, sizeof(temp), "self.%s", temp);
-
-	SetVariantString(temp);
-	AcceptEntityInput(index, "RunScriptCode", index, index);
+	
+	return GetEntPropFloat(proxy, Prop_Data, "m_flReturnValue");
 }
 
 /* Runs a VScript function that returns a vector
  * 
+ * @param proxy			Reference to logic_script_proxy entity
  * @param entity		Entity to run the function on
  * @param format		VScript function to run
  * @param ...			VScript function format parameters 
  * @noreturn
  * @error Invalid entity. Failure to create VScript proxy. Non-vector return
  */
-stock void RunEntVScriptVector(int entity, float vec[3], const char[] format, any ...)
+stock void RunEntVScriptVector(int proxy, int entity, float vec[3], const char[] format, any ...)
 {
+	if (!IsValidEntity(proxy)) {
+		ThrowError("Invalid script proxy (%d)", proxy);
+	}
+	
 	int index = EntRefToEntIndex(entity);
 	if (index == -1) {
 		ThrowError("Entity %d (%d) is invalid", index, entity);
 	}
 
-	char original[64];
-	GetEntPropString(index, Prop_Send, "m_iName", original, sizeof(original));
+	SetVariantString("!activator");
+	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 4);
-	Format(temp, sizeof(temp), "self.SetName(self.%s.ToKVString())", temp);
+	VFormat(temp, sizeof(temp), format, 3);
+
 	SetVariantString(temp);
-	AcceptEntityInput(index, "RunScriptCode", index, index);
-
-	int len = GetEntPropString(index, Prop_Send, "m_iName", temp, sizeof(temp));
-	SetEntPropString(index, Prop_Send, "m_iName", original);
-
-	bool error;
-
-	if (len > 0)
-	{
-		char strVec[3][11];
-
-		int exploded = ExplodeString(temp, " ", strVec, 3, sizeof(strVec[]));
-		if (exploded == 3)
-		{
-			float tempVec[3];
-			for (int i; i < 3; i++) 
-			{
-				if (StringToFloatEx(strVec[i], tempVec[i]) != strlen(strVec[i])) 
-				{
-					error = true;
-					break;
-				}
-			}
-
-			if (!error) 
-			{
-				vec = tempVec;
-				return;
-			}
-		}
+	AcceptEntityInput(proxy, "RunFunctionVector", entity, entity);
+	
+	bool bFailure = (GetEntProp(proxy, Prop_Data, "m_bError") != 0) ? true : false;
+	if (bFailure) {
+		ThrowError("VScript proxy failed");
 	}
-
-	ThrowError("Bad function return. Expected Vector, got \"%s\" (%d bytes)", temp, len);
+	
+	GetEntPropVector(proxy, Prop_Data, "m_vecReturnValue", vec);
 }

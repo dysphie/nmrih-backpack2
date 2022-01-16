@@ -63,6 +63,8 @@ public Plugin myinfo = {
 bool optimize;
 bool fixUpBoards;
 
+int scriptProxyRef = INVALID_ENT_REFERENCE;
+
 ConVar cvOptimize;
 ConVar cvHints;
 ConVar cvGlowType;
@@ -798,6 +800,17 @@ public void OnClientPutInServer(int client)
 {
 	SDKHook(client, SDKHook_WeaponDropPost, OnWeaponDropped);
 	SDKHook(client, SDKHook_WeaponSwitch, OnWeaponSwitch);
+}
+
+public int GetScriptProxy()
+{
+	if (!IsValidEntity(scriptProxyRef))
+	{
+		scriptProxyRef = CreateEntityByName("logic_script_proxy");
+		DispatchSpawn(scriptProxyRef);
+	}
+	
+	return scriptProxyRef;
 }
 
 public void OnPluginStart()
@@ -1790,7 +1803,7 @@ bool GetItemByID(int itemID, Item reg)
 
 float GetCarriedWeight(int client) 
 {
-	return RunEntVScriptFloat(client, "GetCarriedWeight()");
+	return RunEntVScriptFloat(GetScriptProxy(), client, "GetCarriedWeight()");
 }
 
 Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& damage, int& damagetype)
@@ -2025,12 +2038,12 @@ void GetLootForColumn(int column, ArrayList dest)
 
 int GetMaxClip1(int weapon)
 {
-	return RunEntVScriptInt(weapon, "GetMaxClip1()");
+	return RunEntVScriptInt(GetScriptProxy(), weapon, "GetMaxClip1()");
 }
 
 float GetWeaponWeight(int weapon)
 {
-	return RunEntVScriptFloat(weapon, "GetWeight()");
+	return RunEntVScriptFloat(GetScriptProxy(), weapon, "GetWeight()");
 }
 
 bool ClientOwnsWeapon(int client, const char[] name)
