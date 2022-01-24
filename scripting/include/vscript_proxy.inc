@@ -24,7 +24,7 @@ stock void RunEntVScript(int proxy, int entity, const char[] format, any ...)
 	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 5);
+	VFormat(temp, sizeof(temp), format, 4);
 
 	SetVariantString(temp);
 	AcceptEntityInput(proxy, "RunFunction", entity, entity);
@@ -61,7 +61,7 @@ stock int RunEntVScriptString(int proxy, int entity, char[] buffer, int maxlen, 
 	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 5);
+	VFormat(temp, sizeof(temp), format, 6);
 
 	SetVariantString(temp);
 	AcceptEntityInput(proxy, "RunFunctionString", entity, entity);
@@ -99,7 +99,7 @@ stock int RunEntVScriptInt(int proxy, int entity, const char[] format, any ...)
 	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 3);
+	VFormat(temp, sizeof(temp), format, 4);
 
 	SetVariantString(temp);
 	AcceptEntityInput(proxy, "RunFunctionInt", entity, entity);
@@ -136,7 +136,7 @@ stock float RunEntVScriptFloat(int proxy, int entity, const char[] format, any .
 	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 3);
+	VFormat(temp, sizeof(temp), format, 4);
 
 	SetVariantString(temp);
 	AcceptEntityInput(proxy, "RunFunctionFloat", entity, entity);
@@ -173,7 +173,7 @@ stock void RunEntVScriptVector(int proxy, int entity, float vec[3], const char[]
 	AcceptEntityInput(proxy, "SetTargetEntity", entity, entity);
 
 	char temp[1024];
-	VFormat(temp, sizeof(temp), format, 3);
+	VFormat(temp, sizeof(temp), format, 5);
 
 	SetVariantString(temp);
 	AcceptEntityInput(proxy, "RunFunctionVector", entity, entity);
