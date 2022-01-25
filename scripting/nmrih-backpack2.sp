@@ -1,7 +1,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <clientprefs>
-
+#include <autoexecconfig>
 #include <vscript_proxy>
 
 #pragma semicolon 1
@@ -9,23 +9,22 @@
 
 // FIXME: Item trace hulls are not clipped
 // FIXME: Zombies can drop weapons at 0 0 0 when they receive a backpack
-// TODO: Glow backpacks when obj items are added to them, and restore targetnames
+// TODO: Change backpack glow color when obj items are added to them
+// TODO: Re-add speed penalty
 
 #define PLUGIN_PREFIX "[Backpack2] "
 
-#define MASK_NONE 0
 #define INVALID_USER_ID 0
 
 #define TEMPLATE_RANDOM -1
 
-#define WEIGHT_PER_AMMO 5
 #define WEAPON_NOT_CARRIED 0
 #define MAXENTITIES 2048
 #define EF_ITEM_BLINK 0x100
 
 #define MAX_BP_USE_DISTANCE 90.0
 
-
+#define MAX_TARGETNAME 50
 #define MAXPLAYERS_NMRIH 9
 
 #define PROP_PHYS_DEBRIS 4
@@ -56,18 +55,22 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.7",
+	version     = "2.0.8",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
 bool optimize;
 bool fixUpBoards;
 
+ConVar cvAmmoWeight;
+int ammoWeight;
+
+ConVar cvItemGlow;
+
 ConVar cvOptimize;
 ConVar cvHints;
-ConVar cvGlowType;
-ConVar cvGlowBlip;
 ConVar cvGlowDist;
+ConVar cvBlink;
 ConVar cvNpcBackpackChance;
 ConVar cvBackpackCount;
 ConVar cvAmmoMultiplier;
@@ -159,6 +162,7 @@ enum struct StoredItem
 {
 	int id;
 	int ammoCount;
+	char name[MAX_TARGETNAME];
 }
 
 enum struct Backpack
@@ -222,23 +226,17 @@ enum struct Backpack
 
 	void HighlightEntity(int entity)
 	{
-		int glowType = cvGlowType.IntValue;
-		
-		if (glowType == GLOWTYPE_GLOW)
+		if (cvItemGlow.BoolValue && cvGlowDist.IntValue != -1)
 		{
 			DispatchKeyValue(entity, "glowable", "1");
-			DispatchKeyValue(entity, "glowblip", cvGlowBlip.BoolValue ? "1" : "0");
+			DispatchKeyValue(entity, "glowblip", "0");
 			DispatchKeyValueFloat(entity, "glowdistance", cvGlowDist.FloatValue);
-
-			char colorStr[12];
-			FormatEx(colorStr, sizeof(colorStr), "%d %d %d", this.color[0], this.color[1], this.color[2]);
-				
-			DispatchKeyValue(entity, "glowcolor", colorStr);
+			DispatchKeyValue(entity, "glowcolor", "0 255 0"); // same as item pickup
 		
 			RequestFrame(Frame_GlowEntity, EntIndexToEntRef(entity));
-		}	
-		else if (glowType == GLOWTYPE_BLINK)
-		{
+		}
+
+		if (cvBlink.BoolValue) {
 			AddEntityEffects(entity, EF_ITEM_BLINK);
 		}
 	}
@@ -336,7 +334,7 @@ enum struct Backpack
 		this.wearerRef = INVALID_ENT_REFERENCE;
 		this.PlaySound(SoundDrop);
 
-		if (ClientWantsHints(wearer))
+		if (IsValidPlayer(wearer) && ClientWantsHints(wearer))
 		{
 			SendBackpackHint(wearer, "");
 			nextHintTime[wearer] = GetTickedTime() + 2.0;
@@ -412,8 +410,6 @@ enum struct Backpack
 			}	
 		}
 
-
-
 		EndMessage();
 		this.atInterface[client] = true;
 		return true;
@@ -439,12 +435,12 @@ enum struct Backpack
 		UserMsg_EndUse(client);
 	}
 
-	bool AddWeapon(int ammoCount, Item reg, bool suppressSound = false)
+	bool AddWeapon(int ammoCount, Item reg, bool suppressSound = false, const char[] name = "")
 	{
 		for (int i; i < COL_MAX; i++) 
 		{
 			if (reg.columns & (1 << i) 
-				&& this.AddWeaponToColumn(i, ammoCount, reg, suppressSound))
+				&& this.AddWeaponToColumn(i, ammoCount, reg, suppressSound, name))
 			{
 				return true;
 			}
@@ -452,7 +448,7 @@ enum struct Backpack
 		return false;
 	}
 
-	bool AddWeaponToColumn(int col, int ammoCount, Item reg, bool suppressSound = false)
+	bool AddWeaponToColumn(int col, int ammoCount, Item reg, bool suppressSound = false, const char[] name = "")
 	{
 		ArrayList arr = this.items[col];
 		int maxItems = arr.Length;
@@ -466,6 +462,9 @@ enum struct Backpack
 			{
 				stored.id = reg.id;
 				stored.ammoCount = ammoCount;
+				if (name[0]) {
+					strcopy(stored.name, sizeof(stored.name), name);
+				}
 				
 				if (!suppressSound) {
 					this.PlaySound(SoundAdd);
@@ -656,7 +655,7 @@ enum struct Backpack
 		}
 
 		StoredItem stored;
-		this.items[column].GetArray(index, stored); // fix me, could be invalid?
+		this.items[column].GetArray(index, stored);
 
 		if (stored.id == INVALID_ITEM) 
 		{
@@ -683,7 +682,7 @@ enum struct Backpack
 
 			DispatchSpawn(weapon);
 
-			int leftoverWeight = inv_maxcarry.IntValue - RoundToCeil(GetCarriedWeight(client));
+			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
 			if (leftoverWeight < GetWeaponWeight(weapon))
 			{
 				RemoveEntity(weapon);
@@ -692,6 +691,7 @@ enum struct Backpack
 			}
 
 			SetEntProp(weapon, Prop_Send, "m_iClip1", stored.ammoCount);
+			SetEntityTargetname(weapon, stored.name);
 
 			float pos[3];
 			GetClientEyePosition(client, pos);
@@ -715,14 +715,22 @@ enum struct Backpack
 				return false;
 			}
 
-			int leftoverWeight = inv_maxcarry.IntValue - RoundToCeil(GetCarriedWeight(client));
+			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
 			if (leftoverWeight <= 0) {
 				return false;
 			}
 
-			int canTake = leftoverWeight / WEIGHT_PER_AMMO;
-			if (canTake > stored.ammoCount)
+			int canTake;
+			if (ammoWeight <= 0)
+			{
 				canTake = stored.ammoCount;
+			}
+			else
+			{
+				canTake = leftoverWeight / ammoWeight;			
+				if (canTake > stored.ammoCount)
+					canTake = stored.ammoCount;
+			}
 	
 			int curAmmo = GetEntProp(client, Prop_Send, "m_iAmmo", _, reg.ammoID);
 
@@ -808,15 +816,14 @@ public void OnPluginStart()
 	ConVar cvGameVersion = FindConVar("nmrih_version");
 	if (cvGameVersion)
 	{
-		char gameVersion[32];
+		char gameVersion[11];
 		cvGameVersion.GetString(gameVersion, sizeof(gameVersion));
 
 		if (StrEqual(gameVersion, "1.12.0") || StrEqual(gameVersion, "1.12.1"))
 		{
 			fixUpBoards = true;
-		} 
+		}
 	}
-
 	hintCookie = new Cookie("backpack2_hints", "Toggles Backpack2 screen hints", CookieAccess_Protected);
 
 	HookEvent("player_spawn", Event_PlayerSpawn);
@@ -835,60 +842,72 @@ public void OnPluginStart()
 			MAXENTITIES, MaxEntities);
 	}
 
-	cvRightLootMin = CreateConVar("sm_backpack_loot_ammo_min", "0", 
+	cvItemGlow = FindConVar("sv_item_glow");
+
+	// Add support for future 1.12.2 custom ammo weights
+	// If we are still on 1.12.1 or lower, just use the default 5
+	cvAmmoWeight = FindConVar("inv_ammoweight");
+	if (cvAmmoWeight) 
+	{
+		ammoWeight = cvAmmoWeight.IntValue;
+		cvAmmoWeight.AddChangeHook(OnAmmoWeightCvarChange);
+	} 
+	else 
+	{
+		ammoWeight = 5;
+	}
+
+	AutoExecConfig_SetFile("plugin.backpack2");
+
+	cvRightLootMin = AutoExecConfig_CreateConVar("sm_backpack_loot_ammo_min", "0", 
 		"Minimum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvRightLootMax = CreateConVar("sm_backpack_loot_ammo_max", "4", 
+	cvRightLootMax = AutoExecConfig_CreateConVar("sm_backpack_loot_ammo_max", "4", 
 		"Maximum ammo boxes to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvAmmoLootMinPct = CreateConVar("sm_backpack_loot_ammo_min_pct", "40", 
+	cvAmmoLootMinPct = AutoExecConfig_CreateConVar("sm_backpack_loot_ammo_min_pct", "40", 
 		"Minimum fill percentage for ammo boxes spawned as backpack loot", _, true, 1.0);
 
-	cvAmmoLootMaxPct = CreateConVar("sm_backpack_loot_ammo_max_pct", "100", 
+	cvAmmoLootMaxPct = AutoExecConfig_CreateConVar("sm_backpack_loot_ammo_max_pct", "100", 
 		"Maximum fill percentage for ammo boxes spawned as backpack loot", _, true, 1.0);
 
-	cvMiddleLootMin = CreateConVar("sm_backpack_loot_gear_min", "0", 
+	cvMiddleLootMin = AutoExecConfig_CreateConVar("sm_backpack_loot_gear_min", "0", 
 		"Minimum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
 
-	cvMiddleLootMax = CreateConVar("sm_backpack_loot_gear_max", "1", 
+	cvMiddleLootMax = AutoExecConfig_CreateConVar("sm_backpack_loot_gear_max", "1", 
 		"Maximum gear items to place in backpacks spawned as loot", _, true, 0.0, true, 4.0);
 
-	cvLeftLootMin = CreateConVar("sm_backpack_loot_weapon_min", "0", 
+	cvLeftLootMin = AutoExecConfig_CreateConVar("sm_backpack_loot_weapon_min", "0", 
 		"Minimum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvLeftLootMax = CreateConVar("sm_backpack_loot_weapon_max", "2", 
+	cvLeftLootMax = AutoExecConfig_CreateConVar("sm_backpack_loot_weapon_max", "2", 
 		"Maximum weapons to place in backpacks spawned as loot", _, true, 0.0, true, 8.0);
 
-	cvHints = CreateConVar("sm_backpack_show_hints", "1",
+	cvHints = AutoExecConfig_CreateConVar("sm_backpack_show_hints", "1",
 		"Whether to show screen hints on how to use backpacks");
 
-	cvAmmoMultiplier = CreateConVar("sm_backpack_ammo_stack_limit", "4",
+	cvAmmoMultiplier = AutoExecConfig_CreateConVar("sm_backpack_ammo_stack_limit", "4",
 		"Number of ammo pickups that can be stored per ammo slot. 0 means infinite.");
 
-	cvBackpackCount = CreateConVar("sm_backpack_count", "1",
+	cvBackpackCount = AutoExecConfig_CreateConVar("sm_backpack_count", "1",
 	 "Number of backpacks to create at round start. Won't create more backpacks than there are players.");
 
-	cvBackpackColorize = CreateConVar("sm_backpack_colorize", "1",
+	cvBackpackColorize = AutoExecConfig_CreateConVar("sm_backpack_colorize", "1",
 	 "Randomly colorize backpacks to help distinguish them.");
 
-	cvGlowType = CreateConVar("sm_backpack_glow", "2", 
-	 "Highlight method for dropped backpacks. 0 = None, 1 = Outline glow, 2 = Pulsing brightness");
+	cvGlowDist = AutoExecConfig_CreateConVar("sm_backpack_glow_distance", "90", "Glow backbacks in this range of the player");
 
-	cvGlowBlip = CreateConVar("sm_backpack_glow_blip", "0", 
-	 "If highlight mode is set to outline, whether to add a marker to the player's compass");
+	cvBlink = AutoExecConfig_CreateConVar("sm_backpack_blink", "1", "Whether dropped backpacks pulse their brightness");
 
-	cvGlowDist = CreateConVar("sm_backpack_glow_distance", "300.0", 
-	 "If highlight mode is set to outline, distance at which the glow stops being seen");
-
-	cvNpcBackpackChance = CreateConVar("sm_backpack_zombie_spawn_chance", "0.005",
+	cvNpcBackpackChance = AutoExecConfig_CreateConVar("sm_backpack_zombie_spawn_chance", "0.005",
 	 "Chance for a zombie to spawn with a backpack. Set to zero or negative to disable");
 
-	cvOptimize = CreateConVar("sm_backpack_enable_optimizations", "1",
+	cvOptimize = AutoExecConfig_CreateConVar("sm_backpack_enable_optimizations", "1",
 		"Don't trace dropped items if perceived backpack count is zero. Disable for debugging only");
 
 	cvOptimize.AddChangeHook(CvarChangeOptimize);
 
-	AutoExecConfig(true, "plugin.backpack2");
+	AutoExecConfig_ExecuteFile();
 
 	inv_maxcarry = FindConVar("inv_maxcarry");
 
@@ -913,6 +932,10 @@ public void OnPluginStart()
 			OnClientPutInServer(i);
 }
 
+void OnAmmoWeightCvarChange(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	ammoWeight = StringToInt(newValue);
+}
 
 void CvarChangeOptimize(ConVar convar, const char[] oldValue, const char[] newValue)
 {
@@ -1296,7 +1319,7 @@ void CheckAmmoBoxCollide(int ammobox)
 	static float mins[3] = {-8.0, -8.0, -8.0};
 	static float maxs[3] = {8.0, 8.0, 8.0};
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_NONE, OnAmmoBoxCollide, ammobox);
+	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, PARTITION_NON_STATIC_EDICTS, OnAmmoBoxCollide, ammobox);
 }
 
 void CheckWeaponCollide(int weapon)
@@ -1311,7 +1334,7 @@ void CheckWeaponCollide(int weapon)
 	static float mins[3] = {-8.0, -8.0, -8.0};
 	static float maxs[3] = {8.0, 8.0, 8.0};
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, MASK_NONE, OnWeaponCollide, weapon);
+	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, PARTITION_NON_STATIC_EDICTS, OnWeaponCollide, weapon);
 }
 
 bool OnAmmoBoxCollide(int collidedWith, int ammoBox)
@@ -1365,10 +1388,13 @@ bool OnWeaponCollide(int collidedWith, int weapon)
 		{
 			int ammoAmt = GetEntProp(weapon, Prop_Send, "m_iClip1");
 
+			char targetname[MAX_TARGETNAME];
+			GetEntityTargetname(weapon, targetname, sizeof(targetname));
+
 			Backpack backpack;
 			backpacks.GetArray(backpackID, backpack);
 			
-			if (backpack.AddWeapon(ammoAmt, reg)) 
+			if (backpack.AddWeapon(ammoAmt, reg, _, targetname)) 
 			{
 				RemoveEntity(weapon);
 				backpacks.SetArray(backpackID, backpack);
@@ -1788,9 +1814,9 @@ bool GetItemByID(int itemID, Item reg)
 	return true;
 }
 
-float GetCarriedWeight(int client) 
+int GetCarriedWeight(int client) 
 {
-	return RunEntVScriptFloat(client, "GetCarriedWeight()");
+	return RunEntVScriptInt(client, "GetCarriedWeight()");
 }
 
 Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& damage, int& damagetype)
@@ -2028,9 +2054,9 @@ int GetMaxClip1(int weapon)
 	return RunEntVScriptInt(weapon, "GetMaxClip1()");
 }
 
-float GetWeaponWeight(int weapon)
+int GetWeaponWeight(int weapon)
 {
-	return RunEntVScriptFloat(weapon, "GetWeight()");
+	return RunEntVScriptInt(weapon, "GetWeight()");
 }
 
 bool ClientOwnsWeapon(int client, const char[] name)
@@ -2064,3 +2090,14 @@ void UnfreezePlayer(int client)
 	int curFlags = GetEntProp(client, Prop_Send, "m_fFlags");
 	SetEntProp(client, Prop_Send, "m_fFlags", curFlags & ~128);
 }
+
+void SetEntityTargetname(int entity, const char[] name)
+{
+	SetEntPropString(entity, Prop_Data, "m_iName", name);	
+}
+
+int GetEntityTargetname(int entity, char[] buffer, int maxlen)
+{
+	return GetEntPropString(entity, Prop_Data, "m_iName", buffer, maxlen);
+}
+

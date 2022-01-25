@@ -26,13 +26,11 @@
 
 	"Give Backpack Success"
 	{
-		"#format" "{1:N}"
 		"ru" "Дать {1} рюкзак"
 	}
 
 	"Give Backpack Already Owns"
 	{
-		"#format" "{1:N}"
 		"ru" "У {1} уже есть рюкзак"
 	}
 
