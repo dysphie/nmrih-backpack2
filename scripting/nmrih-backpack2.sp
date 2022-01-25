@@ -55,7 +55,7 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.8",
+	version     = "2.0.9",
 	url         = "github.com/dysphie/nmrih-backpack2"
 };
 
@@ -243,7 +243,7 @@ enum struct Backpack
 
 	bool Attach(int wearer, bool suppressSound = false)
 	{
-		if (this.wearerRef != INVALID_ENT_REFERENCE) {
+		if (IsValidEntity(this.wearerRef)) {
 			return false;
 		}
 
@@ -1350,6 +1350,9 @@ bool OnAmmoBoxCollide(int collidedWith, int ammoBox)
 		Backpack bp;
 		backpacks.GetArray(backpackID, bp);
 
+		if (IsValidEntity(bp.wearerRef))
+			return true;
+
 		Item reg;
 		if (!GetItemByEntity(ammoBox, reg)) {
 			return false;
@@ -1395,6 +1398,9 @@ bool OnWeaponCollide(int collidedWith, int weapon)
 
 			Backpack backpack;
 			backpacks.GetArray(backpackID, backpack);
+
+			if (IsValidEntity(backpack.wearerRef))
+				return true;
 			
 			if (backpack.AddWeapon(ammoAmt, reg, _, targetname)) 
 			{
