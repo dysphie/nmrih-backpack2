@@ -716,7 +716,9 @@ enum struct Backpack
 			}
 
 			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
-			if (leftoverWeight <= 0) {
+			if (leftoverWeight <= 0) 
+			{
+				PrintCenterText(client, "%t", "No Inventory Space");
 				return false;
 			}
 
