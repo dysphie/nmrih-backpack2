@@ -3,14 +3,18 @@
 #include <clientprefs>
 #include <autoexecconfig>
 #include <vscript_proxy>
+// #include <debuglays>
 
 #pragma semicolon 1
 #pragma newdecls required
 
-// FIXME: Item trace hulls are not clipped
-// FIXME: Zombies can drop weapons at 0 0 0 when they receive a backpack
-// TODO: Change backpack glow color when obj items are added to them
+// TODO: Change backpack glow color based on fullness
 // TODO: Re-add speed penalty
+// TODO: Option to use backpacks while worn
+// TODO: Infected clients keep their backpack
+// TODO: Helis can drop backpacks
+// TODO: Recover backpacks from previous session
+// FIXME: Hint prefs not being respected probably
 
 #define PLUGIN_PREFIX "[Backpack2] "
 
@@ -37,6 +41,9 @@
 #define INVALID_ITEM 0
 #define INVALID_AMMO -1
 
+#define KEYHINT_TIME 13.0
+#define CLIP1_PENDING -2
+
 enum 
 {
 	COL_LEFT,
@@ -55,24 +62,23 @@ public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
 	description = "Portable inventory boxes",
-	version     = "2.0.9",
-	url         = "github.com/dysphie/nmrih-backpack2"
+	version     = "2.0.10",
+	url         = "https://github.com/dysphie/nmrih-backpack2"
 };
 
-bool optimize;
-bool fixUpBoards;
-
 ConVar cvAmmoWeight;
-int ammoWeight;
+int numStarterBackpacks;
 
+Handle hintUpdateTimer;
 ConVar cvItemGlow;
 
-ConVar cvOptimize;
+bool runningLevel;
+
 ConVar cvHints;
 ConVar cvGlowDist;
 ConVar cvBlink;
 ConVar cvNpcBackpackChance;
-ConVar cvBackpackCount;
+ConVar cvMaxStarterBackpacks;
 ConVar cvAmmoMultiplier;
 ConVar cvBackpackColorize;
 
@@ -84,24 +90,29 @@ ConVar cvMiddleLootMin;
 ConVar cvMiddleLootMax;
 ConVar cvLeftLootMin;
 ConVar cvLeftLootMax;
+ConVar cvHintsInterval;
 
-ConVar inv_maxcarry = null;
+ConVar inv_maxcarry;
 
 Cookie hintCookie;
 
-ArrayList templates = null;
-ArrayList backpacks = null;
+ArrayList templates;
+ArrayList backpacks;
 
-StringMap itemLookup = null;
-ArrayList itemRegistry = null;
+StringMap itemLookup;
+ArrayList itemRegistry;
 
-bool wasLookingAtBackpack[MAXPLAYERS_NMRIH+1] = {false, ...};
-float nextHintTime[MAXPLAYERS_NMRIH+1] = {-1.0, ...};
-bool wearingBackpack[MAXENTITIES+1] = {false, ...};
-bool isDroppedBackpack[MAXENTITIES+1] = {false, ...};
-float stopThinkTime[MAXENTITIES+1] = {-1.0, ...};
+bool wearingBackpack[MAXENTITIES+1];
+bool isDroppedBackpack[MAXENTITIES+1];
+float stopThinkTime[MAXENTITIES+1];
+bool usedAmmoBox[MAXENTITIES+1];
 
-bool used[MAXENTITIES+1] = { false, ...};
+
+int aimedBackpack[MAXPLAYERS_NMRIH+1] = {-1, ...};
+bool hintsEnabled[MAXPLAYERS_NMRIH+1];
+float hintExpireTime[MAXPLAYERS_NMRIH+1];
+bool inFists[MAXPLAYERS_NMRIH+1];
+float nextAimTraceTime[MAXPLAYERS_NMRIH+1];
 
 int MaxEntities = 0;
 int numDroppedBackpacks = 0;
@@ -167,7 +178,7 @@ enum struct StoredItem
 
 enum struct Backpack
 {
-	int templateID;			// Template index, used for sounds, colors, models, etc.
+	int templateID;			// Template index, usedAmmoBox for sounds, colors, models, etc.
 
 	int propRef;			// Entity reference to the backpack's object in the world
 	int wearerRef;				// Entity reference to the backpack wearer
@@ -208,6 +219,12 @@ enum struct Backpack
 		GetRandomRGB(this.color);
 	}
 
+	// TODO
+	// float GetPercentageFilled(float& slotsPct, float& subSlotsPct)
+	// {
+	// 	return 0.0;
+	// }
+
 	void ColorizeProp(int prop)
 	{
 		if (cvBackpackColorize.BoolValue)
@@ -226,13 +243,12 @@ enum struct Backpack
 
 	void HighlightEntity(int entity)
 	{
-		if (cvItemGlow.BoolValue && cvGlowDist.IntValue != -1)
+		if (cvItemGlow.BoolValue)
 		{
 			DispatchKeyValue(entity, "glowable", "1");
 			DispatchKeyValue(entity, "glowblip", "0");
 			DispatchKeyValueFloat(entity, "glowdistance", cvGlowDist.FloatValue);
-			DispatchKeyValue(entity, "glowcolor", "0 255 0"); // same as item pickup
-		
+			DispatchKeyValue(entity, "glowcolor", /*isFull ? "255 0 0" :*/ "0 255 0"); // same as item pickup
 			RequestFrame(Frame_GlowEntity, EntIndexToEntRef(entity));
 		}
 
@@ -243,6 +259,12 @@ enum struct Backpack
 
 	bool Attach(int wearer, bool suppressSound = false)
 	{
+		if (wearingBackpack[wearer]) 
+		{
+			LogError("Tried to attach backpack to %d, but they already have one", wearer);
+			return false;
+		}
+
 		if (IsValidEntity(this.wearerRef)) {
 			return false;
 		}
@@ -258,6 +280,7 @@ enum struct Backpack
 		templates.GetArray(this.templateID, template);
 		DispatchKeyValue(attached, "model", template.attachMdl);
 		DispatchKeyValue(attached, "disableshadows", "1");
+		SetEntPropString(attached, Prop_Data, "m_iClassname", "backpack_attached");
 		
 		if (!DispatchSpawn(attached)) 
 		{
@@ -276,6 +299,12 @@ enum struct Backpack
 
 		SetVariantString("!activator");
 		AcceptEntityInput(attached, "SetAttached", wearer, wearer);
+
+		if (IsValidPlayer(wearer) && AreHintsEnabled(wearer)) 
+		{
+			// Clear "You can pick up" hints
+			EnsureNoHints(wearer, GetTickedTime(), 2.0);
+		}
 
 		this.ColorizeProp(attached);
 
@@ -316,6 +345,8 @@ enum struct Backpack
 
 		// Drop was successful past this point
 
+		SetEntPropString(dropped, Prop_Data, "m_iClassname", "backpack");
+
 		numDroppedBackpacks++;
 		this.ColorizeProp(dropped);
 		this.HighlightEntity(dropped);
@@ -334,10 +365,9 @@ enum struct Backpack
 		this.wearerRef = INVALID_ENT_REFERENCE;
 		this.PlaySound(SoundDrop);
 
-		if (IsValidPlayer(wearer) && ClientWantsHints(wearer))
+		if (IsValidPlayer(wearer) && AreHintsEnabled(wearer)) 
 		{
-			SendBackpackHint(wearer, "");
-			nextHintTime[wearer] = GetTickedTime() + 2.0;
+			EnsureNoHints(wearer, GetTickedTime(), 2.0);
 		}
 
 		return true;
@@ -372,11 +402,7 @@ enum struct Backpack
 		FreezePlayer(client);
 		this.PlaySound(SoundOpen);
 
-		if (ClientWantsHints(client))
-		{
-			SendBackpackHint(client, "");
-			nextHintTime[client] = GetTickedTime() + 999999.9;
-		}
+		// EnsureNoHints(client, GetTickedTime());
 
 		Handle msg = StartMessageOne("ItemBoxOpen", client, USERMSG_RELIABLE|USERMSG_BLOCKHOOKS);
 		BfWrite bf = UserMessageToBfWrite(msg);
@@ -392,14 +418,6 @@ enum struct Backpack
 			for (; i < max; i++)
 			{
 				int id = this.items[k].Get(i, StoredItem::id);
-
-				// HACKHACK: Replace boards with the barricade hammer in the user msg
-				// as clients are unable to render board entries in 1.12.1
-				// https://github.com/nmrih/source-game/issues/1256
-				if (fixUpBoards && id == 61) {
-					id = 23;
-				}
-
 				bf.WriteShort(id);
 			}
 
@@ -427,8 +445,8 @@ enum struct Backpack
 	void EndUse(int client)
 	{
 		// HACK: Re enable hints
-		nextHintTime[client] = GetTickedTime();
-		wasLookingAtBackpack[client] = false;
+		hintExpireTime[client] = 0.0;
+		aimedBackpack[client] = -1;
 
 		UnfreezePlayer(client);
 		this.atInterface[client] = false;
@@ -462,19 +480,69 @@ enum struct Backpack
 			{
 				stored.id = reg.id;
 				stored.ammoCount = ammoCount;
-				if (name[0]) {
-					strcopy(stored.name, sizeof(stored.name), name);
-				}
+
+				strcopy(stored.name, sizeof(stored.name), name);
 				
 				if (!suppressSound) {
 					this.PlaySound(SoundAdd);
 				}
 
 				arr.SetArray(i, stored);
+
 				return true;
 			}
 		}
 		return false;
+	}
+
+	void AddWeaponByEnt(int weapon)
+	{
+		if (IsValidEntity(this.wearerRef)) 
+		{
+			LogError("Tried to add weapon (%d) to carried backpack", weapon);
+			return;
+		}
+
+		Item reg;
+		if (!GetItemByEntity(weapon, reg)) {
+			return;
+		}
+		
+		int ammoAmt = GetEntProp(weapon, Prop_Send, "m_iClip1");
+
+		char targetname[MAX_TARGETNAME];
+		GetEntityTargetname(weapon, targetname, sizeof(targetname));
+
+		if (this.AddWeapon(ammoAmt, reg, _, targetname)) {
+			RemoveEntity(weapon);
+		}
+	}
+
+	void AddAmmoByEnt(int ammoBox, bool suppressSound = false, bool allowStacking = true)
+	{
+		if (IsValidEntity(this.wearerRef)) 
+		{
+			LogError("Tried to add ammo box (%d) to carried backpack", ammoBox);
+			return;
+		}
+
+		Item reg;
+		if (!GetItemByEntity(ammoBox, reg)) {
+			return;
+		}
+
+		int ammoCount = GetEntProp(ammoBox, Prop_Data, "m_iAmmoCount");
+		int leftover = this.AddAmmo(ammoCount, reg, suppressSound, allowStacking);
+
+		if (leftover < ammoCount) 
+		{
+			if (!leftover) {
+				RemoveEntity(ammoBox);
+			}
+			else {
+				SetEntProp(ammoBox, Prop_Data, "m_iAmmoCount", leftover);
+			}
+		}
 	}
 
 	int AddAmmo(int ammoCount, Item reg, bool suppressSound = false, bool allowStacking = true)
@@ -534,22 +602,7 @@ enum struct Backpack
 
 			if (reg.category == CAT_WEAPON)
 			{
-				int weapon = CreateEntityByName(reg.alias);
-				DispatchSpawn(weapon);
-
-				int rndClip = 1;
-				int maxClip = GetMaxClip1(weapon);
-				if (maxClip != -1)
-				{
-					int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
-					int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
-					rndClip = GetRandomInt(min, max);	
-				}
-
-				if (this.AddWeaponToColumn(column, rndClip, reg, true))
-				{
-					RemoveEntity(weapon);	
-				}
+				this.AddWeaponToColumn(column, CLIP1_PENDING, reg, true);
 			}
 			else if (reg.category == CAT_AMMO)
 			{
@@ -559,7 +612,7 @@ enum struct Backpack
 				}
 
 				int maxAmmo = reg.capacity * cvAmmoLootMaxPct.IntValue / 100;
-				int rndClip = GetRandomInt(minAmmo, maxAmmo);
+				int rndClip = GetRandomInt(minAmmo, maxAmmo) * cvAmmoMultiplier.IntValue;
 				this.AddAmmoToColumn(column, rndClip, reg, true, false);
 			}
 		}
@@ -614,7 +667,7 @@ enum struct Backpack
 			addTo.id = itemID;
 
 			arr.SetArray(bestSlot, addTo);
-
+			
 			// Don't take more ammo than we have
 			if (curAmmo < 0)
 			{
@@ -672,21 +725,38 @@ enum struct Backpack
 		{
 			if (ClientOwnsWeapon(client, reg.alias)) 
 			{
-				PrintCenterText(client, "%t", "Already Own This Type");
-				return false;
-			}
-			int weapon = CreateEntityByName(reg.alias);
-			if (weapon == -1) {
+				PrintCenterText(client, "#NMRiH_InventoryBox_OwnsItem");
 				return false;
 			}
 
-			DispatchSpawn(weapon);
+			int weapon = CreateEntityByName(reg.alias);
+			if (weapon == -1 || !DispatchSpawn(weapon)) {
+				return false;
+			}
+
+			// Items spawning as loot don't have their ammo count computed
+			// until the player tries to take them out, for optimization
+			if (stored.ammoCount == CLIP1_PENDING)
+			{
+				int rndClip = 1;
+				int maxClip = GetMaxClip1(weapon);
+				if (maxClip != -1)
+				{
+					int min = RoundToNearest(maxClip * cvAmmoLootMinPct.FloatValue / 100);
+					int max = RoundToNearest(maxClip * cvAmmoLootMaxPct.FloatValue / 100);
+					rndClip = GetRandomInt(min, max);	
+				}
+
+				stored.ammoCount = rndClip;
+			}
+
+			// FIXME: We don't account for ammo weight here when we should
 
 			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
 			if (leftoverWeight < GetWeaponWeight(weapon))
 			{
 				RemoveEntity(weapon);
-				PrintCenterText(client, "%t", "No Inventory Space");
+				PrintCenterText(client, "#NMRiH_InventoryBox_CantCarry");
 				return false;
 			}
 
@@ -718,11 +788,12 @@ enum struct Backpack
 			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
 			if (leftoverWeight <= 0) 
 			{
-				PrintCenterText(client, "%t", "No Inventory Space");
+				PrintCenterText(client, "#NMRiH_InventoryBox_CantCarry");
 				return false;
 			}
 
 			int canTake;
+			int ammoWeight = cvAmmoWeight.BoolValue;
 			if (ammoWeight <= 0)
 			{
 				canTake = stored.ammoCount;
@@ -806,32 +877,22 @@ void GetRandomRGB(int rgb[3])
 
 public void OnClientPutInServer(int client)
 {
-	SDKHook(client, SDKHook_WeaponDropPost, OnWeaponDropped);
-	SDKHook(client, SDKHook_WeaponSwitch, OnWeaponSwitch);
+	HookPlayer(client);
 }
 
 public void OnPluginStart()
 {
+	//AddCommandListener(OnDropWeapon, "+dropweapon");
+
 	LoadTranslations("backpack2.phrases");
 	LoadTranslations("common.phrases");
 
-	ConVar cvGameVersion = FindConVar("nmrih_version");
-	if (cvGameVersion)
-	{
-		char gameVersion[11];
-		cvGameVersion.GetString(gameVersion, sizeof(gameVersion));
-
-		if (StrEqual(gameVersion, "1.12.0") || StrEqual(gameVersion, "1.12.1"))
-		{
-			fixUpBoards = true;
-		}
-	}
 	hintCookie = new Cookie("backpack2_hints", "Toggles Backpack2 screen hints", CookieAccess_Protected);
 
-	HookEvent("player_spawn", Event_PlayerSpawn);
+	HookEvent("player_spawn", OnPlayerSpawn);
 	HookEvent("player_death", OnPlayerDeath);
 	HookEvent("player_extracted", OnPlayerExtracted);
-	HookEvent("nmrih_reset_map", Event_MapReset);
+	HookEvent("nmrih_reset_map", OnMapReset);
 	HookEvent("game_restarting", OnGameRestarting, EventHookMode_PostNoCopy);
 	HookEvent("npc_killed", OnNPCKilled);
 
@@ -845,19 +906,7 @@ public void OnPluginStart()
 	}
 
 	cvItemGlow = FindConVar("sv_item_glow");
-
-	// Add support for future 1.12.2 custom ammo weights
-	// If we are still on 1.12.1 or lower, just use the default 5
 	cvAmmoWeight = FindConVar("inv_ammoweight");
-	if (cvAmmoWeight) 
-	{
-		ammoWeight = cvAmmoWeight.IntValue;
-		cvAmmoWeight.AddChangeHook(OnAmmoWeightCvarChange);
-	} 
-	else 
-	{
-		ammoWeight = 5;
-	}
 
 	AutoExecConfig_SetFile("plugin.backpack2");
 
@@ -887,27 +936,33 @@ public void OnPluginStart()
 
 	cvHints = AutoExecConfig_CreateConVar("sm_backpack_show_hints", "1",
 		"Whether to show screen hints on how to use backpacks");
+	hintsEnabled[0] = cvHints.BoolValue;
+	cvHints.AddChangeHook(OnHintsCvarChanged);
+
+
+	cvHintsInterval = AutoExecConfig_CreateConVar("sm_backpack_hints_interval", "1.0",
+		"Rate in seconds at which hints are updated. " ...
+		"Lower values result in more accurate hints but increase CPU usage");
+	cvHintsInterval.AddChangeHook(OnHintsIntervalCvarChanged);
 
 	cvAmmoMultiplier = AutoExecConfig_CreateConVar("sm_backpack_ammo_stack_limit", "4",
 		"Number of ammo pickups that can be stored per ammo slot. 0 means infinite.");
 
-	cvBackpackCount = AutoExecConfig_CreateConVar("sm_backpack_count", "1",
+	cvMaxStarterBackpacks = AutoExecConfig_CreateConVar("sm_backpack_count", "1",
 	 "Number of backpacks to create at round start. Won't create more backpacks than there are players.");
 
 	cvBackpackColorize = AutoExecConfig_CreateConVar("sm_backpack_colorize", "1",
 	 "Randomly colorize backpacks to help distinguish them.");
+	cvBackpackColorize.AddChangeHook(OnColorizeCvarChanged);
 
-	cvGlowDist = AutoExecConfig_CreateConVar("sm_backpack_glow_distance", "90", "Glow backbacks in this range of the player");
+	cvGlowDist = AutoExecConfig_CreateConVar("sm_backpack_glow_distance", "90", 
+		"Glow backbacks in this range of the player");
 
-	cvBlink = AutoExecConfig_CreateConVar("sm_backpack_blink", "1", "Whether dropped backpacks pulse their brightness");
+	cvBlink = AutoExecConfig_CreateConVar("sm_backpack_blink", "0", "Whether dropped backpacks pulse their brightness");
+	cvBlink.AddChangeHook(OnBlinkCvarChanged);
 
 	cvNpcBackpackChance = AutoExecConfig_CreateConVar("sm_backpack_zombie_spawn_chance", "0.005",
 	 "Chance for a zombie to spawn with a backpack. Set to zero or negative to disable");
-
-	cvOptimize = AutoExecConfig_CreateConVar("sm_backpack_enable_optimizations", "1",
-		"Don't trace dropped items if perceived backpack count is zero. Disable for debugging only");
-
-	cvOptimize.AddChangeHook(CvarChangeOptimize);
 
 	AutoExecConfig_ExecuteFile();
 
@@ -926,22 +981,78 @@ public void OnPluginStart()
 	RegAdminCmd("sm_bp", Cmd_Backpack, ADMFLAG_CHEATS);
 	RegAdminCmd("sm_backpack", Cmd_Backpack, ADMFLAG_CHEATS);
 
-	hintCookie.SetPrefabMenu(CookieMenu_OnOff_Int, "Backpack2 Hints");
+	hintCookie.SetPrefabMenu(CookieMenu_OnOff_Int, "Backpack Hints", OnHintCookieChanged);
 
-
+	// Lateload support
 	for (int i = 1; i <= MaxClients; i++)
+	{
 		if (IsClientInGame(i))
-			OnClientPutInServer(i);
+		{
+			ResetPlayer(i);
+			HookPlayer(i);
+
+			if (AreClientCookiesCached(i)) {
+				CacheHintPref(i);
+			}
+		}
+	}
+
+	InitializeHints();
 }
 
-void OnAmmoWeightCvarChange(ConVar convar, const char[] oldValue, const char[] newValue)
+void OnHintsIntervalCvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
 {
-	ammoWeight = StringToInt(newValue);
+	InitializeHints();
 }
 
-void CvarChangeOptimize(ConVar convar, const char[] oldValue, const char[] newValue)
+void OnHintsCvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
 {
-	optimize = newValue[0] != '0';
+	hintsEnabled[0] = cvHints.BoolValue;
+}
+
+void OnBlinkCvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	Backpack bp;
+	int max = backpacks.Length;
+	for (int i; i < max; i++)
+	{
+		backpacks.GetArray(i, bp);
+		
+		if (!bp.IsWorn() && IsValidEntity(bp.propRef)) 
+		{
+			if (convar.BoolValue) {
+				AddEntityEffects(bp.propRef, EF_ITEM_BLINK);	
+			}
+			else {
+				RemoveEntityEffects(bp.propRef, EF_ITEM_BLINK);	
+			}
+		}
+	}
+}
+
+void OnColorizeCvarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	Backpack bp;
+	int max = backpacks.Length;
+	for (int i; i < max; i++)
+	{
+		backpacks.GetArray(i, bp);
+		
+		if (!bp.IsWorn() && IsValidEntity(bp.propRef)) 
+		{
+			if (convar.BoolValue) 
+			{
+				SetEntityRenderMode(bp.propRef, RENDER_TRANSCOLOR);
+				SetEntityRenderColor(bp.propRef, bp.color[0], bp.color[1], bp.color[2], 255);	
+			}
+			else
+			{
+				SetEntityRenderMode(bp.propRef, RENDER_NORMAL);
+				SetEntityRenderColor(bp.propRef, 255, 255, 255, 255);
+			}
+
+		}
+	}	
 }
 
 public Action Cmd_DropBackpack(int client, int args)
@@ -963,6 +1074,8 @@ void Frame_GlowEntity(int entRef)
 public void OnMapEnd()
 {
 	DeleteAllBackpacks();
+	numStarterBackpacks = 0;
+	runningLevel = false;
 }
 
 public void OnPluginEnd()
@@ -1010,19 +1123,18 @@ Action Cmd_CloseBox(int client, const char[] command, int argc)
 
 	char cmdIndex[11];
 	GetCmdArg(1, cmdIndex, sizeof(cmdIndex));
-	int index = StringToInt(cmdIndex);
+	int bpEnt = StringToInt(cmdIndex);
 
-	int result = backpacks.FindValue(EntIndexToEntRef(index), Backpack::propRef);
-	if (result == -1)
+	Backpack bp;
+	int bpID = GetBackpackFromEntity(bpEnt, bp);
+	if (bpID == -1)
 	{
 		UserMsg_EndUse(client); // Prevent user from getting stuck
 		return Plugin_Continue;
 	}
 
-	Backpack bp;
-	backpacks.GetArray(result, bp);
 	bp.EndUse(client);
-	backpacks.SetArray(result, bp);
+	backpacks.SetArray(bpID, bp);
 
 	return Plugin_Continue;
 }
@@ -1036,17 +1148,15 @@ Action Cmd_TakeItems(int client, const char[] command, int argc)
 
 	char cmdIndex[11];
 	GetCmdArg(1, cmdIndex, sizeof(cmdIndex));
-	int index = StringToInt(cmdIndex);
+	int bpEnt = StringToInt(cmdIndex);
 
-	int idx = backpacks.FindValue(EntIndexToEntRef(index), Backpack::propRef);
+	Backpack bp;
+	int idx = GetBackpackFromEntity(bpEnt, bp);
 	if (idx == -1)
 	{
 		UserMsg_EndUse(client); // Prevent user from getting stuck
 		return Plugin_Continue;
 	}
-
-	Backpack bp;
-	backpacks.GetArray(idx, bp);
 
 	char cmdLeftCol[11], cmdMiddleCol[11], cmdRightCol[11];
 	GetCmdArg(2, cmdLeftCol, sizeof(cmdLeftCol));
@@ -1078,20 +1188,21 @@ Action Cmd_TakeItems(int client, const char[] command, int argc)
 	return Plugin_Handled;
 }
 
-Action OnBackpackPropUse(int backpack, int activator, int caller, UseType type, float value)
+Action OnBackpackPropUse(int bpEnt, int activator, int caller, UseType type, float value)
 {
-	if (!IsValidPlayer(caller))
-		return Plugin_Continue;
-
-	int result = backpacks.FindValue(EntIndexToEntRef(backpack), Backpack::propRef);
-	if (result == -1) {
+	if (!IsValidPlayer(caller)) {
 		return Plugin_Continue;
 	}
 
 	Backpack bp;
-	backpacks.GetArray(result, bp);
-	bp.Use(caller);
-	backpacks.SetArray(result, bp);
+	int bpID = GetBackpackFromEntity(bpEnt, bp);
+
+	if (bpID != -1) 
+	{
+		bp.Use(caller);
+		backpacks.SetArray(bpID, bp);
+	}
+	
 	return Plugin_Handled;
 }
 
@@ -1102,6 +1213,8 @@ bool IsValidPlayer(int client)
 
 public void OnMapStart()
 {
+	numDroppedBackpacks = 0;
+	runningLevel = true;
 	PrecacheAssets();
 }
 
@@ -1170,46 +1283,36 @@ void AddModelToDownloadsTable(const char[] model_name)
 
 public void OnEntityCreated(int entity, const char[] classname)
 {
-	if (0 < entity <= MaxEntities && StrEqual(classname, "item_ammo_box"))
+	if (!runningLevel || !IsValidEdict(entity))
+		return;
+
+	if (StrEqual(classname, "item_ammo_box"))
 	{
 		SDKHook(entity, SDKHook_Use, OnAmmoBoxUse);
 		SDKHook(entity, SDKHook_SpawnPost, OnAmmoBoxSpawned);
 	}
 	else if (IsBackpackableNPC(classname)) {
-		SDKHook(entity, SDKHook_SpawnPost, OnZombieSpawned);
+		MakeLootZombie(entity);
 	}
 }
 
 Action OnAmmoBoxUse(int ammobox, int activator, int caller, UseType type, float value)
 {
 	if (0 < caller <= MaxClients) {
-		used[ammobox] = true;
+		usedAmmoBox[ammobox] = true;
 	}
 
 	return Plugin_Continue;
 }
 
-void OnZombieSpawned(int zombie)
+public void MakeLootZombie(int zombie)
 {
-	// Fixes "Map not running" error
-	RequestFrame(OnZombieReallySpawned, EntIndexToEntRef(zombie));
-}
-
-
-public void OnZombieReallySpawned(int zombieRef)
-{
-	int zombie = EntRefToEntIndex(zombieRef);
-	if (zombie == -1) {
-		return;
-	}
-
 	float rnd = GetURandomFloat();
 	if (rnd <= cvNpcBackpackChance.FloatValue)
 	{
 		Backpack bp;
 		bp.Init(TEMPLATE_RANDOM);
 		bp.Attach(zombie, true);
-
 		// Add random loot
 
 		int amt = GetRandomInt(cvLeftLootMin.IntValue, cvLeftLootMax.IntValue);
@@ -1234,11 +1337,14 @@ public void OnZombieReallySpawned(int zombieRef)
 
 void OnAmmoBoxSpawned(int ammobox)
 {
-	used[ammobox] = false;
-	
+	usedAmmoBox[ammobox] = false;
+
+	if (numDroppedBackpacks <= 0) {
+		return;
+	}
+
 	stopThinkTime[ammobox] = GetTickedTime() + 1.5;
-	// CheckAmmoBoxCollide(ammobox); // crashing in 1.12.0
-	CreateTimer(0.0, OnAmmoFallThink, EntIndexToEntRef(ammobox), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+	RequestFrame(OnAmmoFallThink, EntIndexToEntRef(ammobox));
 }
 
 void OnWeaponDropped(int client, int weapon)
@@ -1247,293 +1353,268 @@ void OnWeaponDropped(int client, int weapon)
 		return;
 	}
 
-	stopThinkTime[weapon] = GetTickedTime() + 1.5;
-	// CheckWeaponCollide(weapon); // crashing in 1.12.0
-	CreateTimer(0.0, OnWeaponFallThink, EntIndexToEntRef(weapon), TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
-}
-
-// HACK: Remove "Drop backpack hint" if client is switching away from fists with a backpack
-// I'm gonna tweak this to not use a switch hook later
-Action OnWeaponSwitch(int client, int weapon)
-{
-	if (0 < client <= MaxClients && wearingBackpack[client] && ClientWantsHints(client)) 
-	{
-		int curWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-		if (curWeapon != -1)
-		{
-			char classname[15];
-			GetEntityClassname(curWeapon, classname, sizeof(classname));
-
-			if (StrEqual(classname, "me_fists"))
-			{
-				SendBackpackHint(client, "");
-			}
-		}	
+	if (numDroppedBackpacks <= 0) {
+		return;
 	}
 
-	return Plugin_Continue;
+	stopThinkTime[weapon] = GetTickedTime() + 1.5;
+	RequestFrame(OnWeaponFallThink, EntIndexToEntRef(weapon));
 }
 
-
-Action OnAmmoFallThink(Handle timer, int ammoRef)
-// void OnAmmoFallThink(int ammoRef)
+void OnWeaponSwitchPost(int client, int weapon)
 {
+	if (IsValidPlayer(client) && IsValidEdict(weapon)) 
+	{
+		char classname[10];
+		GetClientWeapon(client, classname, sizeof(classname));
+		if (StrEqual(classname, "me_fists")) 
+		{
+			inFists[client] = true;
+			return;
+		}
+	}
+
+	inFists[client] = false;
+	return;
+}
+
+void OnAmmoFallThink(int ammoRef)
+{
+	if (numDroppedBackpacks <= 0) {
+		return;
+	}
+
 	int ammobox = EntRefToEntIndex(ammoRef);
-	if (ammobox == -1)
-		return Plugin_Stop;
+	if (!IsValidEdict(ammobox)) {
+		return;
+	}
 
 	// Fix duplication exploit where players can drop ammo, press E to pick it up and still 
 	// have it collide with a backpack afterwards, making it end up in both inventory and backpack
-	if (used[ammobox])
-		return Plugin_Stop;
-
-	if (GetTickedTime() >= stopThinkTime[ammobox])
-		return Plugin_Stop;
-	
-	CheckAmmoBoxCollide(ammobox);
-	// RequestFrame(OnAmmoFallThink, ammoRef);
-	return Plugin_Continue;
-}
-
-Action OnWeaponFallThink(Handle timer, int weaponRef)
-{
-	int weapon = EntRefToEntIndex(weaponRef);
-	if (weapon != -1 && GetTickedTime() < stopThinkTime[weapon] && 
-		GetEntProp(weapon, Prop_Send, "m_iState") == WEAPON_NOT_CARRIED)
-	{
-		CheckWeaponCollide(weapon);
-		return Plugin_Continue;
-	}
-	else {
-		return Plugin_Stop;
-	}
-}
-
-void CheckAmmoBoxCollide(int ammobox)
-{
-	if (optimize && numDroppedBackpacks <= 0) {
+	if (usedAmmoBox[ammobox]) {
 		return;
 	}
 
+	if (!IsItemFalling(ammobox)) {
+		return;
+	}
+	
 	float pos[3];
 	GetEntPropVector(ammobox, Prop_Data, "m_vecOrigin", pos);
 
-	static float mins[3] = {-8.0, -8.0, -8.0};
-	static float maxs[3] = {8.0, 8.0, 8.0};
+	// float mins[3];
+	// float maxs[3];
+	// GetEntityMins(ammobox, mins);
+	// GetEntityMaxs(ammobox, maxs);
+	static float mins[3] = {-8.0, ...};
+	static float maxs[3] = {8.0, ...}; 
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, PARTITION_NON_STATIC_EDICTS, OnAmmoBoxCollide, ammobox);
+	int bpEnt = GetBackpackEntInBox(pos, mins, maxs);
+	if (bpEnt != -1) 
+	{
+		Backpack bp;
+		int bpID = GetBackpackFromEntity(bpEnt, bp);
+		if (bpID != -1)
+		{
+			bp.AddAmmoByEnt(ammobox);
+			backpacks.SetArray(bpID, bp);
+		} 	
+	}
+	else {
+		RequestFrame(OnAmmoFallThink, ammoRef);	
+	}
 }
 
-void CheckWeaponCollide(int weapon)
+void OnWeaponFallThink(int weaponRef)
 {
-	if (optimize && numDroppedBackpacks <= 0) {
+	if (numDroppedBackpacks <= 0) {
 		return;
 	}
 
+	int weapon = EntRefToEntIndex(weaponRef);
+	if (!IsValidEdict(weapon) || !IsItemFalling(weapon) || !IsDroppedWeapon(weapon)) {
+		return;
+	}
+	
 	float pos[3];
 	GetEntPropVector(weapon, Prop_Data, "m_vecOrigin", pos);
 
-	static float mins[3] = {-8.0, -8.0, -8.0};
-	static float maxs[3] = {8.0, 8.0, 8.0};
+	// float mins[3], maxs[3];
+	// GetEntityMins(weapon, mins);
+	// GetEntityMaxs(weapon, maxs);
 
-	TR_EnumerateEntitiesHull(pos, pos, mins, maxs, PARTITION_NON_STATIC_EDICTS, OnWeaponCollide, weapon);
-}
+	static float mins[3] = {-8.0, ...};
+	static float maxs[3] = {8.0, ...}; 
 
-bool OnAmmoBoxCollide(int collidedWith, int ammoBox)
-{
-	if (!IsValidEdict(collidedWith))
-		return true;
-
-	int backpackID = backpacks.FindValue(EntIndexToEntRef(collidedWith), Backpack::propRef);
-	if (backpackID != -1)
+	int bpEnt = GetBackpackEntInBox(pos, mins, maxs);
+	if (bpEnt != -1) 
 	{
 		Backpack bp;
-		backpacks.GetArray(backpackID, bp);
-
-		if (IsValidEntity(bp.wearerRef))
-			return true;
-
-		Item reg;
-		if (!GetItemByEntity(ammoBox, reg)) {
-			return false;
-		}
-
-		int ammoCount = GetEntProp(ammoBox, Prop_Data, "m_iAmmoCount");
-		int leftover = bp.AddAmmo(ammoCount, reg);
-
-		if (leftover < ammoCount) 
+		int bpID = GetBackpackFromEntity(bpEnt, bp);
+		if (bpID != -1)
 		{
-			if (!leftover) {
-				RemoveEntity(ammoBox);
-			}
-			else {
-				SetEntProp(ammoBox, Prop_Data, "m_iAmmoCount", leftover);
-			}
-
-			backpacks.SetArray(backpackID, bp);
-			return false;
+			bp.AddWeaponByEnt(weapon);
+			backpacks.SetArray(bpID, bp);
 		}
+	}
+	else {
+		RequestFrame(OnWeaponFallThink, weaponRef);
+	}
+}
 
+int GetBackpackEntInBox(float pos[3], float mins[3], float maxs[3])
+{
+	TR_TraceHullFilter(pos, pos, mins, maxs, MASK_ALL, TraceFilter_DroppedBackpacks);
+
+	if (TR_DidHit())
+	{
+		// Box(pos, mins, maxs, 0.1, GREEN);
+		int hit = TR_GetEntityIndex();
+		if (IsValidEdict(hit) && isDroppedBackpack[hit]) 
+		{
+			return hit;
+		}
+	}
+	
+	//Box(pos, mins, maxs, 0.1, RED);
+	return -1;
+}
+
+bool TraceFilter_DroppedBackpacks(int entity, int contentsMask)
+{
+	return IsValidEdict(entity) && isDroppedBackpack[entity];
+}
+
+bool IsItemFalling(int item)
+{
+	return GetTickedTime() < stopThinkTime[item];
+}
+
+bool IsDroppedWeapon(int weapon)
+{
+	return GetEntProp(weapon, Prop_Send, "m_iState") == WEAPON_NOT_CARRIED;
+}
+
+// void GetEntityMins(int entity, float mins[3])
+// {
+// 	GetEntPropVector(entity, Prop_Data, "m_vecSurroundingMins", mins);
+// }
+
+// void GetEntityMaxs(int entity, float maxs[3])
+// {
+// 	GetEntPropVector(entity, Prop_Data, "m_vecSurroundingMaxs", maxs);
+// }
+
+bool ProcessButtons(int client, int& buttons, int wanted)
+{
+	if (buttons & wanted && !(GetEntProp(client, Prop_Data, "m_nOldButtons") & wanted))
+	{
+		buttons &= ~wanted;
 		return true;
 	}
 
-	return true;
+	return false;
 }
 
-bool OnWeaponCollide(int collidedWith, int weapon)
+public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3], float angles[3], int& weapon, int& subtype, int& cmdnum, int& tickcount, int& seed, int mouse[2])
 {
-	if (!IsValidEdict(collidedWith))
-		return true;
-
-	int backpackID = backpacks.FindValue(EntIndexToEntRef(collidedWith), Backpack::propRef);
-	if (backpackID != -1)
+	if (wearingBackpack[client])
 	{
-		Item reg;
-		if (GetItemByEntity(weapon, reg))
+		if (inFists[client] && ProcessButtons(client, buttons, IN_ALT2)) 
 		{
-			int ammoAmt = GetEntProp(weapon, Prop_Send, "m_iClip1");
-
-			char targetname[MAX_TARGETNAME];
-			GetEntityTargetname(weapon, targetname, sizeof(targetname));
-
-			Backpack backpack;
-			backpacks.GetArray(backpackID, backpack);
-
-			if (IsValidEntity(backpack.wearerRef))
-				return true;
-			
-			if (backpack.AddWeapon(ammoAmt, reg, _, targetname)) 
-			{
-				RemoveEntity(weapon);
-				backpacks.SetArray(backpackID, backpack);
-				return false;
-			}
+			ClientDropBackpack(client);
 		}
 	}
 
-	return true;
-}
-
-public Action OnPlayerRunCmd(int client, int& buttons, int& impulse, float vel[3], 
-	float angles[3], int& weapon, int& subtype, int& cmdnum, int& tickcount, int& seed, int mouse[2])
-{
-	if (buttons & IN_ALT2 && !(GetEntProp(client, Prop_Data, "m_nOldButtons") & IN_ALT2))
-	{
-		int activeWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-		if (activeWeapon != -1)
-		{
-			char classname[12];
-			GetEntityClassname(activeWeapon, classname, sizeof(classname));
-
-			if (StrEqual(classname, "me_fists"))
-			{
-				ClientDropBackpack(client);
-				
-				if (ClientWantsHints(client)) {
-					SendBackpackHint(client, "");
-				}
-			}
-		}
-	}
-
-	else if (ClientWantsHints(client))
-	{
-		float curTime = GetTickedTime();
-		if (curTime < nextHintTime[client]) {
-			return Plugin_Continue;
-		}
-
-		nextHintTime[client] = curTime + 0.2;
-
-		if (wearingBackpack[client])
-		{
-			int curWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-			if (curWeapon != -1)
-			{
-				char classname[12];
-				GetEntityClassname(curWeapon, classname, sizeof(classname));
-
-				if (StrEqual(classname, "me_fists"))
-				{
-					SendBackpackHint(client, "%T", "Hint You Can Drop", client);
-				}
-			}
-		}
-
-		else if (NMRiH_IsPlayerAlive(client) && IsLookingAtBackpack(client))
-		{
-			if (!wasLookingAtBackpack[client]) 
-			{
-				SendBackpackHint(client, "%T", "Hint You Can Pick Up", client);
-			}
-
-			wasLookingAtBackpack[client] = true;
-		}
-		else if (wasLookingAtBackpack[client]) 
-		{
-			SendBackpackHint(client, "");
-			wasLookingAtBackpack[client] = false;
-		}
-	}
+	// Allow instant pickup with right click
+	//	NOTE: Disabled, kinda ugly with client pred
+	// else if (ProcessButtons(client, buttons, IN_ATTACK2))
+	// {
+	// 	//buttons &= ~IN_ATTACK;
+	// 	aimedBackpack[client] = GetAimBackpack(client);
+	// 	if (aimedBackpack[client] != -1)
+	// 	{
+	// 		Backpack bp;
+	// 		int bpID = GetBackpackFromEntity(aimedBackpack[client], bp);
+	// 		if (bpID != -1)
+	// 		{
+	// 			bp.Attach(client);
+	// 			backpacks.SetArray(bpID, bp);
+	// 		}	
+	// 	}
+	// }
 
 	return Plugin_Continue;
 }
 
-bool ClientWantsHints(int client)
+int GetBackpackFromEntity(int entity, Backpack bp)
 {
-	if (!cvHints.BoolValue)
-	{
-		return false;
+	int bpID = BackpackEntToBackpackID(entity);
+	if (bpID != -1) {
+		backpacks.GetArray(bpID, bp);
 	}
+	return bpID;
+}
 
-	if (AreClientCookiesCached(client))
-	{
-		char value[11];
-		hintCookie.Get(client, value, sizeof(value));
-
-		if (value[0] && value[0] == '0') 
-		{
-			return false;
-		}
-	}
-
-	return true;
+int BackpackEntToBackpackID(int entity)
+{
+	return backpacks.FindValue(EntIndexToEntRef(entity), Backpack::propRef);
 }
 
 public void OnEntityDestroyed(int entity)
 {
 	if (IsValidEdict(entity))
 	{
-		wearingBackpack[entity] = false;
-
 		if (isDroppedBackpack[entity])
 		{
-			int idx = backpacks.FindValue(EntIndexToEntRef(entity), Backpack::propRef);
-			if (idx != -1)
+			int bpID = BackpackEntToBackpackID(entity);
+			if (bpID != -1)
 			{
-				DeleteBackpack(idx);    
+				DeleteBackpack(bpID);    
 			}
 			isDroppedBackpack[entity] = false;
 		}
+
+		wearingBackpack[entity] = false;
+		stopThinkTime[entity] = 0.0;
+		usedAmmoBox[entity] = false;
 	}
 }
 
-bool IsLookingAtBackpack(int client) {
+int GetAimBackpack(int client) 
+{
+	if (numDroppedBackpacks < 1) {
+		return -1;
+	}
+	
+	float startPos[3]; 
+	float endPos[3];
+	GetClientEyePosition(client, startPos);
+	GetClientEyeAngles(client, endPos);
 
-	float eyePos[3]; 
-	float eyeAng[3];
-	GetClientEyePosition(client, eyePos);
-	GetClientEyeAngles(client, eyeAng);
+	ForwardVector(startPos, endPos, MAX_BP_USE_DISTANCE, endPos);
 
-	TR_TraceRayFilter(eyePos, eyeAng, MASK_SHOT, RayType_Infinite, TraceFilter_IgnoreOne, client);
+	TR_TraceRayFilter(startPos, endPos, MASK_SHOT, RayType_EndPoint, TraceFilter_DroppedBackpacks);
 
 	if (TR_DidHit()) 
 	{
 		int hitEnt = TR_GetEntityIndex();
-		return IsValidEdict(hitEnt) && isDroppedBackpack[hitEnt] && CanReachBackpack(client, hitEnt);
+		if (hitEnt > 0) {
+			return hitEnt;
+		}
 	}
 
-	return false;
+	return -1;
+}
+
+void ForwardVector(const float vPos[3], const float vAng[3], float fDistance, float vReturn[3])
+{
+	float vDir[3];
+	GetAngleVectors(vAng, vDir, NULL_VECTOR, NULL_VECTOR);
+	vReturn = vPos;
+	vReturn[0] += vDir[0] * fDistance;
+	vReturn[1] += vDir[1] * fDistance;
+	vReturn[2] += vDir[2] * fDistance;
 }
 
 bool CanReachBackpack(int client, int bpProp)
@@ -1829,63 +1910,70 @@ int GetCarriedWeight(int client)
 
 Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& damage, int& damagetype)
 {
-	if ((damagetype & DMG_CLUB || damagetype & DMG_SLASH) && 
-		IsValidPlayer(attacker) && 
-		!wearingBackpack[attacker] && 
-		IsValidEntity(inflictor) && 
-		HasEntProp(inflictor, Prop_Send, "m_hOwner") && 
-		CanReachBackpack(attacker, backpack))
+	Action result = Plugin_Handled; // We never take damage
+
+	// Must be a melee attack
+	if (!(damagetype & DMG_CLUB) && !(damagetype & DMG_SLASH)) {
+		return result;
+	}
+
+	// Must be damage done by a player
+	if (!IsValidPlayer(attacker) || wearingBackpack[attacker] || !IsValidEntity(inflictor)) {
+		return result;
+	}
+
+	// Must be the clients active weapon
+	if (inflictor != GetActiveWeapon(attacker)) {
+		return result;
+	}
+
+	// Out of range
+	if (!CanReachBackpack(attacker, backpack)) {
+		return result;
+	}
+	
+	Backpack bp;
+	int idx = GetBackpackFromEntity(backpack, bp);
+	if (idx != -1)
 	{
-		int owner = GetEntPropEnt(inflictor, Prop_Send, "m_hOwner");
-		if (owner == attacker)
-		{
-			int idx = backpacks.FindValue(EntIndexToEntRef(backpack), Backpack::propRef);
-			if (idx != -1)
-			{
-				Backpack bp;
-				backpacks.GetArray(idx, bp);
-				bp.Attach(owner);
-				backpacks.SetArray(idx, bp);
-			}
-		}
+		bp.Attach(attacker);
+		backpacks.SetArray(idx, bp);
 	}
 
 	return Plugin_Handled;
 }
 
-int owedBackpacks = 0;
-
-void Event_MapReset(Event event, const char[] name, bool dontBroadcast)
+void OnMapReset(Event event, const char[] name, bool dontBroadcast)
 {
-	owedBackpacks = 0;
-	RequestFrame(BeginGivingBackpacks);
+	numStarterBackpacks = 0;
+	// Players haven't respawned yet, wait a frame
+	RequestFrame(Frame_GiveBackpackAll);
 }
 
-void BeginGivingBackpacks()
+void Frame_GiveBackpackAll()
 {
-	owedBackpacks = cvBackpackCount.IntValue;
+	int maxBackpacks = cvMaxStarterBackpacks.IntValue;
+	if (numStarterBackpacks >= maxBackpacks) {
+		return;
+	}
 
+	// Pick backpack wearers evenly 
 	ArrayList candidates = new ArrayList();
 
 	for (int i = 1; i <= MaxClients; i++) 
 	{
-		if (IsClientInGame(i) && NMRiH_IsPlayerAlive(i))
+		if (IsClientInGame(i) && NMRiH_IsPlayerAlive(i) && !wearingBackpack[i])
 		{
 			candidates.Push(i);
 		}
 	}
 
-	while (owedBackpacks > 0)
+	while (numStarterBackpacks < maxBackpacks && candidates.Length > 0)
 	{
-		int maxCandidates = candidates.Length;
-		if (maxCandidates < 1)
-			break;
-
-		int rnd = GetRandomInt(0, maxCandidates - 1);
-
-		GiveEntityBackpack(candidates.Get(rnd));
+		int rnd = GetRandomInt(0, candidates.Length - 1);
+		GiveEntityBackpack(candidates.Get(rnd)); // TODO: return bool and check
 		candidates.Erase(rnd);
-		owedBackpacks--;
+		numStarterBackpacks++;
 	}
 
 	delete candidates;
@@ -1899,13 +1987,18 @@ void GiveEntityBackpack(int entity, int template = -1)
 	backpacks.PushArray(bp);
 }
 
-void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (client && NMRiH_IsPlayerAlive(client) && owedBackpacks > 0)
+	if (!client || !NMRiH_IsPlayerAlive(client) || wearingBackpack[client]) {
+		return;
+	}
+
+	// Check if we still owe starter backpacks, if so, give one away
+	if (numStarterBackpacks < cvMaxStarterBackpacks.IntValue) 
 	{
 		GiveEntityBackpack(client);
-		owedBackpacks--;
+		numStarterBackpacks++;
 	}
 }
 
@@ -1920,10 +2013,17 @@ public void OnPlayerExtracted(Event event, const char[] name, bool dontBroadcast
 public void OnPlayerDeath(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (client) {
+	if (client) 
+	{
+		// TODO: Make infected survivors keep their backpack
 		ClientDropBackpack(client);
 	}
 }
+
+// bool DiedWhileInfected(int client)
+// {
+// 	return GetEntPropFloat(client, Prop_Send, "m_flInfectionTime") != -1.0;
+// }
 
 public void OnClientDisconnect(int client)
 {
@@ -2031,16 +2131,87 @@ public bool TraceFilter_IgnoreOne(int entity, int contentMask, int ignore)
 	return entity != ignore;
 }
 
-void SendBackpackHint(int client, const char[] format, any ...)
+void EnsureNoHints(int client, float curTime, float till = 0.0)
 {
-	char buffer[255];
-	VFormat(buffer, sizeof(buffer), format, 3);
+	if (curTime >= hintExpireTime[client]) {
+		return;
+	}
 
+	KeyHintText(client, "");
+	hintExpireTime[client] = curTime + till;
+}
+
+void ShowBackpackHint(int client, float curTime, const char[] format, any ...)
+{
+	if (curTime < hintExpireTime[client]) {
+		return;
+	}
+
+	SetGlobalTransTarget(client);
+	char buffer[255];
+	VFormat(buffer, sizeof(buffer), format, 4);
+	KeyHintText(client, buffer);
+
+	hintExpireTime[client] = curTime + KEYHINT_TIME;
+}
+
+Action Timer_UpdateHints(Handle timer)
+{
+	if (!hintsEnabled[0]) 
+	{
+		return Plugin_Continue;
+	}
+
+	float curTime = GetTickedTime();
+
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!hintsEnabled[i] || !IsClientInGame(i) || !NMRiH_IsPlayerAlive(i)) 
+		{
+			continue;
+		}
+
+		if (wearingBackpack[i]) 
+		{
+			if (inFists[i]) 
+			{
+				ShowBackpackHint(i, curTime,  "%T", "Hint You Can Drop", i);
+			} 
+			else 
+			{
+				EnsureNoHints(i, curTime);
+			}
+		}
+		else 
+		{
+			int bpEnt = GetAimBackpack(i);
+			if (bpEnt != -1) 
+			{
+				if (aimedBackpack[i] == -1) 
+				{
+					ShowBackpackHint(i, curTime, "%T", "Hint You Can Pick Up", i);	
+				}
+			}
+
+			else
+			{
+				EnsureNoHints(i, curTime);
+			}
+
+			aimedBackpack[i] = bpEnt;
+		}
+	}
+
+	return Plugin_Continue;
+}
+
+void KeyHintText(int client, const char[] text)
+{	
 	Handle msg = StartMessageOne("KeyHintText", client, USERMSG_BLOCKHOOKS);
 	BfWrite bf = UserMessageToBfWrite(msg);
 	bf.WriteByte(1); // number of strings, only 1 is accepted
-	bf.WriteString(buffer);
-	EndMessage();
+	bf.WriteString(text);
+	EndMessage();	
 }
 
 void GetLootForColumn(int column, ArrayList dest)
@@ -2109,3 +2280,69 @@ int GetEntityTargetname(int entity, char[] buffer, int maxlen)
 	return GetEntPropString(entity, Prop_Data, "m_iName", buffer, maxlen);
 }
 
+public bool OnClientConnect(int client, char[] rejectmsg, int maxlen)
+{
+	ResetPlayer(client);
+	return true;
+}
+
+public void OnClientCookiesCached(int client)
+{
+	CacheHintPref(client);
+}
+
+void CacheHintPref(int client)
+{
+	char value[11];
+	hintCookie.Get(client, value, sizeof(value));
+	hintsEnabled[client] = !value[0] || value[0] == '1';
+}
+
+void OnHintCookieChanged(int client, CookieMenuAction action, any info, char[] buffer, int maxlen)
+{
+	// TODO: Translate title
+	if (action == CookieMenuAction_SelectOption) {
+		CacheHintPref(client);
+	}
+}
+
+void RemoveEntityEffects(int entity, int effects)
+{
+    int curEffects = GetEntProp(entity, Prop_Send, "m_fEffects");
+    SetEntProp(entity, Prop_Send, "m_fEffects", curEffects & ~effects);
+}
+
+bool AreHintsEnabled(int client)
+{
+	// global (set by cvar) + local (set by cookie)
+	return hintsEnabled[0] && hintsEnabled[client];
+}
+
+void HookPlayer(int client)
+{
+	SDKHook(client, SDKHook_WeaponDropPost, OnWeaponDropped);
+	SDKHook(client, SDKHook_WeaponSwitchPost, OnWeaponSwitchPost);
+
+	int weapon = GetActiveWeapon(client);
+	OnWeaponSwitchPost(client, weapon);
+}
+
+int GetActiveWeapon(int client)
+{
+	return GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+}
+
+void ResetPlayer(int client)
+{
+	aimedBackpack[client] = -1;
+ 	hintExpireTime[client] = 0.0;
+	inFists[client] = false;
+	hintsEnabled[client] = true;
+	nextAimTraceTime[client] = 0.0;
+}
+
+void InitializeHints()
+{
+	delete hintUpdateTimer;
+	hintUpdateTimer = CreateTimer(cvHintsInterval.FloatValue, Timer_UpdateHints, _, TIMER_REPEAT);
+}
