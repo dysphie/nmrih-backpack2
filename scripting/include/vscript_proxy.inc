@@ -363,7 +363,7 @@ stock int RunEntVScriptEnt(int entity, const char[] code, int proxy = -1)
 	AcceptEntityInput(proxy, "SetTargetEntity", index, index);
 
 	SetVariantString(code);
-	AcceptEntityInput(proxy, "RunFunctionHandle", index, index);
+	AcceptEntityInput(proxy, "RunFunctionEHandle", index, index);
 	
 	if (GetEntProp(proxy, Prop_Data, "m_bError")) {
 		ThrowError("VScript code failed");
