@@ -3,7 +3,6 @@
 #include <clientprefs>
 #include <autoexecconfig>
 #include <vscript_proxy>
-// #include <debuglays>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -14,9 +13,10 @@
 // TODO: Infected clients keep their backpack
 // TODO: Helis can drop backpacks
 // TODO: Recover backpacks from previous session
-// FIXME: Hint prefs not being respected probably
 
 #define PLUGIN_PREFIX "[Backpack2] "
+#define PLUGIN_DESCRIPTION "Portable inventory boxes"
+#define PLUGIN_VERSION "2.0.12"
 
 #define INVALID_USER_ID 0
 
@@ -61,8 +61,8 @@ enum
 public Plugin myinfo = {
 	name        = "[NMRiH] Backpack2",
 	author      = "Dysphie & Ryan",
-	description = "Portable inventory boxes",
-	version     = "2.0.10",
+	description = PLUGIN_DESCRIPTION,
+	version     = PLUGIN_VERSION,
 	url         = "https://github.com/dysphie/nmrih-backpack2"
 };
 
@@ -295,6 +295,10 @@ enum struct Backpack
 			isDroppedBackpack[dropped] = false;
 			RemoveEntity(dropped);
 			numDroppedBackpacks--;
+
+			// Sanity check
+			if (numDroppedBackpacks < 0)
+				numDroppedBackpacks = 0;
 		}
 
 		SetVariantString("!activator");
@@ -348,6 +352,13 @@ enum struct Backpack
 		SetEntPropString(dropped, Prop_Data, "m_iClassname", "backpack");
 
 		numDroppedBackpacks++;
+
+		// Sanity check
+		int maxBackpacks = backpacks.Length;
+		if (numDroppedBackpacks > maxBackpacks) {
+			numDroppedBackpacks = maxBackpacks;
+		}
+
 		this.ColorizeProp(dropped);
 		this.HighlightEntity(dropped);
 
@@ -837,8 +848,14 @@ enum struct Backpack
 		this.EndUseForAll();
 
 		int wearer = EntRefToEntIndex(this.wearerRef);
-		if (wearer == -1) {
+		if (wearer == -1) 
+		{
 			numDroppedBackpacks--;
+			
+			// Sanity check
+			if (numDroppedBackpacks < 0)
+				numDroppedBackpacks = 0;
+
 		} else {
 			wearingBackpack[wearer] = false;
 		}
@@ -887,7 +904,7 @@ public void OnPluginStart()
 	LoadTranslations("backpack2.phrases");
 	LoadTranslations("common.phrases");
 
-	hintCookie = new Cookie("backpack2_hints", "Toggles Backpack2 screen hints", CookieAccess_Protected);
+	hintCookie = new Cookie("backpack2_hints", "Enables or disables backpack screen hints", CookieAccess_Protected);
 
 	HookEvent("player_spawn", OnPlayerSpawn);
 	HookEvent("player_death", OnPlayerDeath);
@@ -939,6 +956,8 @@ public void OnPluginStart()
 	hintsEnabled[0] = cvHints.BoolValue;
 	cvHints.AddChangeHook(OnHintsCvarChanged);
 
+	CreateConVar("backpack2_version", PLUGIN_VERSION, PLUGIN_DESCRIPTION,
+    	FCVAR_SPONLY|FCVAR_NOTIFY|FCVAR_DONTRECORD);
 
 	cvHintsInterval = AutoExecConfig_CreateConVar("sm_backpack_hints_interval", "1.0",
 		"Rate in seconds at which hints are updated. " ...
@@ -981,7 +1000,7 @@ public void OnPluginStart()
 	RegAdminCmd("sm_bp", Cmd_Backpack, ADMFLAG_CHEATS);
 	RegAdminCmd("sm_backpack", Cmd_Backpack, ADMFLAG_CHEATS);
 
-	hintCookie.SetPrefabMenu(CookieMenu_OnOff_Int, "Backpack Hints", OnHintCookieChanged);
+	SetCookieMenuItem(OnBackpackCookiesMenu, hintCookie, "Backpack Hints");
 
 	// Lateload support
 	for (int i = 1; i <= MaxClients; i++)
@@ -995,7 +1014,7 @@ public void OnPluginStart()
 				CacheHintPref(i);
 			}
 		}
-	}
+	}	
 
 	InitializeHints();
 }
@@ -1563,27 +1582,38 @@ int BackpackEntToBackpackID(int entity)
 
 public void OnEntityDestroyed(int entity)
 {
-	if (IsValidEdict(entity))
+	if (!IsValidEdict(entity)) {
+		return;
+	}
+	
+	if (isDroppedBackpack[entity])
 	{
-		if (isDroppedBackpack[entity])
+		int bpID = BackpackEntToBackpackID(entity);
+		if (bpID != -1)
 		{
-			int bpID = BackpackEntToBackpackID(entity);
-			if (bpID != -1)
-			{
-				DeleteBackpack(bpID);    
-			}
-			isDroppedBackpack[entity] = false;
+			DeleteBackpack(bpID);    
+		}
+		isDroppedBackpack[entity] = false;
+	}
+
+	if (wearingBackpack[entity])
+	{
+		int wearerRef = EntIndexToEntRef(entity);
+		int bpID = backpacks.FindValue(wearerRef, Backpack::wearerRef);
+		if (bpID != -1)
+		{
+			DeleteBackpack(bpID);
 		}
 
 		wearingBackpack[entity] = false;
-		stopThinkTime[entity] = 0.0;
-		usedAmmoBox[entity] = false;
 	}
+	stopThinkTime[entity] = 0.0;
+	usedAmmoBox[entity] = false;
 }
 
 int GetAimBackpack(int client) 
 {
-	if (numDroppedBackpacks < 1) {
+	if (numDroppedBackpacks <= 0) {
 		return -1;
 	}
 	
@@ -1683,7 +1713,7 @@ void ParseConfig()
 	}
 
 	ParseItemRegistry(kv);
-	PrintToServer("Loaded %d backpack templates", ParseTemplates(kv));
+	PrintToServer(PLUGIN_PREFIX ... "Loaded %d backpack templates", ParseTemplates(kv));
 
 	delete kv;
 }
@@ -1945,6 +1975,7 @@ Action OnBackpackPropDamage(int backpack, int& attacker, int& inflictor, float& 
 
 void OnMapReset(Event event, const char[] name, bool dontBroadcast)
 {
+	DeleteAllBackpacks();
 	numStarterBackpacks = 0;
 	// Players haven't respawned yet, wait a frame
 	RequestFrame(Frame_GiveBackpackAll);
@@ -1990,7 +2021,7 @@ void GiveEntityBackpack(int entity, int template = -1)
 void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
-	if (!client || !NMRiH_IsPlayerAlive(client) || wearingBackpack[client]) {
+	if (!client || !NMRiH_IsPlayerAlive(client)  || wearingBackpack[client]) {
 		return;
 	}
 
@@ -2298,12 +2329,60 @@ void CacheHintPref(int client)
 	hintsEnabled[client] = !value[0] || value[0] == '1';
 }
 
-void OnHintCookieChanged(int client, CookieMenuAction action, any info, char[] buffer, int maxlen)
+void OnBackpackCookiesMenu(int client, CookieMenuAction action, any info, char[] buffer, int maxlen)
 {
-	// TODO: Translate title
-	if (action == CookieMenuAction_SelectOption) {
-		CacheHintPref(client);
+	if (action == CookieMenuAction_DisplayOption)
+	{
+		FormatEx(buffer, maxlen, "%T", "Backpack Settings", client);
 	}
+	else
+	{
+		ShowHintCookieMenu(client);
+	}
+}
+
+void ShowHintCookieMenu(int client)
+{
+	Menu menu = new Menu(OnHintCookieMenu);
+
+	char buffer[255];
+	FormatEx(buffer, sizeof(buffer), "%T", "Backpack Settings", client);
+
+	menu.SetTitle(buffer);
+
+	FormatEx(buffer, sizeof(buffer), "%T", 
+		hintsEnabled[client] ? "Hints Enabled" : "Hints Disabled", 
+		client);
+
+	menu.AddItem("", buffer);
+	menu.Display(client, MENU_TIME_FOREVER);
+}
+
+int OnHintCookieMenu(Menu menu, MenuAction action, int param1, int param2)
+{
+	if (action == MenuAction_End) 
+	{
+		delete menu;
+	}
+	else if (action == MenuAction_Select) 
+	{
+		hintsEnabled[param1] = !hintsEnabled[param1];
+
+		if (!hintsEnabled[param1]) {
+			EnsureNoHints(param1, GetTickedTime());
+		}
+
+		if (AreClientCookiesCached(param1))
+		{
+			char buffer[11];
+			FormatEx(buffer, sizeof(buffer), "%d", hintsEnabled[param1]);
+			hintCookie.Set(param1, buffer);
+		}
+
+		ShowHintCookieMenu(param1);
+	}
+
+	return 0;
 }
 
 void RemoveEntityEffects(int entity, int effects)

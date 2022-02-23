@@ -36,16 +36,6 @@
 		"en" "{1} already owns a backpack"
 	}
 
-	"Already Own This Type"
-	{
-		"en" "Already own an item of this type!"
-	}
-
-	"No Inventory Space"
-	{
-		"en" "Not enough room for this item!"
-	}
-
 	"Invalid Drop Position"
 	{
 		"en"	"Backpack cannot be dropped here"
