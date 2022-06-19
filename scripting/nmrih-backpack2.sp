@@ -804,7 +804,7 @@ enum struct Backpack
 			}
 
 			int canTake;
-			int ammoWeight = cvAmmoWeight.BoolValue;
+			int ammoWeight = cvAmmoWeight.IntValue;
 			if (ammoWeight <= 0)
 			{
 				canTake = stored.ammoCount;
