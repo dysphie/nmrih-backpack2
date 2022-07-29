@@ -21,7 +21,7 @@
 
 	"Hint You Can Pick Up"
 	{
-		"en"	"[PUNCH] Equip backpack\n\n[E] Open backpack"
+		"en"	"%+attack% Equip backpack\n\n%+use% Open backpack"
 	}
 
 	"Give Backpack Success"

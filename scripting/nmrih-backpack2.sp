@@ -16,7 +16,7 @@
 
 #define PLUGIN_PREFIX "[Backpack2] "
 #define PLUGIN_DESCRIPTION "Portable inventory boxes"
-#define PLUGIN_VERSION "2.0.13"
+#define PLUGIN_VERSION "2.0.14"
 
 #define INVALID_USER_ID 0
 

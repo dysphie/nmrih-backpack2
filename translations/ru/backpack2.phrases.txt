@@ -16,12 +16,12 @@
 
 	"Hint You Can Drop"
 	{
-		"ru"	"[G] Сбросить рюкзак"
+		"ru"	"%%+dropweapon%% Сбросить рюкзак"
 	}
 
 	"Hint You Can Pick Up"
 	{
-		"ru"	"[УДАРЬ] Надеть рюкзак\n\n[E] Открыть рюкзак"
+		"ru"	"%%+attack%% Надеть рюкзак\n%%+use%% Открыть рюкзак"
 	}
 
 	"Give Backpack Success"
