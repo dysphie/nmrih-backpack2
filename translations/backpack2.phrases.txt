@@ -16,12 +16,12 @@
 
 	"Hint You Can Drop"
 	{
-		"en"	"[G] Drop Backpack"
+		"en"	"%%+dropweapon%% Drop backpack"
 	}
 
 	"Hint You Can Pick Up"
 	{
-		"en"	"%+attack% Equip backpack\n\n%+use% Open backpack"
+		"en"	"%%+attack%% Equip %%+use%% Open"
 	}
 
 	"Give Backpack Success"

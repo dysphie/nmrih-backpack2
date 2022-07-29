@@ -21,7 +21,7 @@
 
 	"Hint You Can Pick Up"
 	{
-		"ru"	"%%+attack%% Надеть рюкзак\n%%+use%% Открыть рюкзак"
+		"ru"	"%%+attack%% Надеть рюкзак %%+use%% Открыть рюкзак"
 	}
 
 	"Give Backpack Success"
