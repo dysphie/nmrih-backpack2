@@ -16,7 +16,7 @@
 
 #define PLUGIN_PREFIX "[Backpack2] "
 #define PLUGIN_DESCRIPTION "Portable inventory boxes"
-#define PLUGIN_VERSION "2.0.14"
+#define PLUGIN_VERSION "2.0.15"
 
 #define INVALID_USER_ID 0
 
@@ -684,9 +684,10 @@ enum struct Backpack
 			{
 				curAmmo = 0;
 			}
+			
 			else if (curAmmo > 0)
 			{
-				this.AddAmmoRecursively(arr, itemID, curAmmo, maxAmmo);
+				curAmmo = this.AddAmmoRecursively(arr, itemID, curAmmo, maxAmmo);
 			}
 		}
 		
@@ -760,8 +761,6 @@ enum struct Backpack
 
 				stored.ammoCount = rndClip;
 			}
-
-			// FIXME: We don't account for ammo weight here when we should
 
 			int leftoverWeight = inv_maxcarry.IntValue - GetCarriedWeight(client);
 			if (leftoverWeight < GetWeaponWeight(weapon))
