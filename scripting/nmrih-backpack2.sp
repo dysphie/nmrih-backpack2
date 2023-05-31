@@ -16,7 +16,7 @@
 
 #define PLUGIN_PREFIX "[Backpack2] "
 #define PLUGIN_DESCRIPTION "Portable inventory boxes"
-#define PLUGIN_VERSION "2.0.15"
+#define PLUGIN_VERSION "2.0.16"
 
 #define INVALID_USER_ID 0
 
@@ -506,17 +506,22 @@ enum struct Backpack
 		return false;
 	}
 
-	void AddWeaponByEnt(int weapon)
+	bool AddWeaponByEnt(int weapon)
 	{
 		if (IsValidEntity(this.wearerRef)) 
 		{
 			LogError("Tried to add weapon (%d) to carried backpack", weapon);
-			return;
+			return false;
 		}
 
 		Item reg;
 		if (!GetItemByEntity(weapon, reg)) {
-			return;
+			return false;
+		}
+
+		// Ignore medical items that have been consumed
+		if (IsItemConsumed(weapon)) {
+			return false;
 		}
 		
 		int ammoAmt = GetEntProp(weapon, Prop_Send, "m_iClip1");
@@ -524,9 +529,13 @@ enum struct Backpack
 		char targetname[MAX_TARGETNAME];
 		GetEntityTargetname(weapon, targetname, sizeof(targetname));
 
-		if (this.AddWeapon(ammoAmt, reg, _, targetname)) {
+		if (this.AddWeapon(ammoAmt, reg, _, targetname)) 
+		{
 			RemoveEntity(weapon);
+			return true;
 		}
+
+		return false;
 	}
 
 	void AddAmmoByEnt(int ammoBox, bool suppressSound = false, bool allowStacking = true)
@@ -1469,9 +1478,8 @@ void OnWeaponFallThink(int weaponRef)
 	{
 		Backpack bp;
 		int bpID = GetBackpackFromEntity(bpEnt, bp);
-		if (bpID != -1)
+		if (bpID != -1 && bp.AddWeaponByEnt(weapon))
 		{
-			bp.AddWeaponByEnt(weapon);
 			backpacks.SetArray(bpID, bp);
 		}
 	}
@@ -2423,4 +2431,10 @@ void InitializeHints()
 {
 	delete hintUpdateTimer;
 	hintUpdateTimer = CreateTimer(cvHintsInterval.FloatValue, Timer_UpdateHints, _, TIMER_REPEAT);
+}
+
+bool IsItemConsumed(int item)
+{
+	return HasEntProp(item, Prop_Send, "_applied") &&
+		GetEntProp(item, Prop_Send, "_applied") != 0;
 }
