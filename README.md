@@ -11,7 +11,8 @@ Backpacks are randomly colored to help distinguish them.
 https://user-images.githubusercontent.com/11559683/142296315-f216a804-92b9-4bff-bbfd-e247b86dc9d1.mp4
 
 # Requirements
-- A server capable of serving custom files to clients (FastDL)
+- A web server to serve custom content (FastDL)
+- [SourceMod](https://www.sourcemod.net/downloads.php?branch=dev) (1.12.6998 or higher is recommended for improved performance)
 
 # Installation:
 - Grab the latest ZIP files from [releases](https://github.com/dysphie/nmrih-backpack2/releases)
