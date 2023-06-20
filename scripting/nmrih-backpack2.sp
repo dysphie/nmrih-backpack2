@@ -352,8 +352,7 @@ enum struct Backpack
 		// Drop was successful past this point
 
 		// UNDONE: Can seemingly crash the server when CPhysicsProp::~CPhysicsProp() is invoked
-		// SetEntPropString(attached, Prop_Data, "m_iClassname", "backpack_attached");
-		SetEntPropString(dropped, Prop_Data, "m_iClassname", "backpack");
+		// SetEntPropString(dropped, Prop_Data, "m_iClassname", "backpack");
 
 		numDroppedBackpacks++;
 
