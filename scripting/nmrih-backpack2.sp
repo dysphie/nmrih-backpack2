@@ -16,7 +16,7 @@
 
 #define PLUGIN_PREFIX "[Backpack2] "
 #define PLUGIN_DESCRIPTION "Portable inventory boxes"
-#define PLUGIN_VERSION "2.0.16"
+#define PLUGIN_VERSION "2.0.17"
 
 #define INVALID_USER_ID 0
 
@@ -280,7 +280,9 @@ enum struct Backpack
 		templates.GetArray(this.templateID, template);
 		DispatchKeyValue(attached, "model", template.attachMdl);
 		DispatchKeyValue(attached, "disableshadows", "1");
-		SetEntPropString(attached, Prop_Data, "m_iClassname", "backpack_attached");
+		
+		// UNDONE: Can seemingly crash the server when CDynamicProp::~CDynamicProp() is invoked
+		// SetEntPropString(attached, Prop_Data, "m_iClassname", "backpack_attached");
 		
 		if (!DispatchSpawn(attached)) 
 		{
@@ -349,6 +351,8 @@ enum struct Backpack
 
 		// Drop was successful past this point
 
+		// UNDONE: Can seemingly crash the server when CPhysicsProp::~CPhysicsProp() is invoked
+		// SetEntPropString(attached, Prop_Data, "m_iClassname", "backpack_attached");
 		SetEntPropString(dropped, Prop_Data, "m_iClassname", "backpack");
 
 		numDroppedBackpacks++;
