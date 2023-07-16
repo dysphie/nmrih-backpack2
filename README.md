@@ -126,22 +126,25 @@ Keys not mentioned here should be left as-is unless you know what you're doing, 
 
 Configuration variables are saved to `cfg/sourcemod/plugin.backpack2.cfg`
 
-- `sm_backpack_count` - Number of backpacks to give out on round restart. Won't create more backpacks than there are players.
-- `sm_backpack_ammo_stack_limit` - Number of ammo boxes of a type that can be stored per ammo slot.
-- `sm_backpack_show_hints` `0/1` - Show screen hints about backpack usage
-- `sm_backpack_colorize` - Randomly colorize backpacks to help distinguish them.
-- `sm_backpack_glow` `0/1/2` - Highlight dropped backpacks. 0 = Don't, 1 = Outline glow, 2 = Pulsing brightness
-- `sm_backpack_glow_blip` `0/1` - Whether glowing backpacks show up in player compasses, if applicable
-- `sm_backpack_glow_distance` - Distance at which glowing backpacks stop glowing, if applicable
-- `sm_backpack_zombie_chance` `[0.0-1.0]` - Chance for a zombie to spawn with a backpack. 0 means never, 1.0 means 100%. For reference, crawler chance is 0.02
-- `sm_backpack_zombie_ammo_min` `[0-8]` - Minimum items to place in the 'Ammo' column for backpacks spawned as loot
-- `sm_backpack_zombie_ammo_max` `[0-8]` - Maximum items to place in the 'Ammo' column for backpacks spawned as loot
-- `sm_backpack_zombie_gear_min` `[0-4]` - Minimum items to place in the 'Gear' column for backpacks spawned as loot
-- `sm_backpack_zombie_gear_max` `[0-4]` - Maximum items to place in the 'Gear' column for backpacks spawned as loot
-- `sm_backpack_zombie_weapon_min` `[0-8]` - Minimum items to place in the 'Weapon' column for backpacks spawned as loot
-- `sm_backpack_zombie_weapon_max` `[0-8]` - Maximum items to place in the 'Weapon' column for backpacks spawned as loot
-- `sm_backpack_zombie_ammo_min_pct` `[0-100]` - Minimum ammo fill percentage for weapons and ammo boxes spawned as backpack loot
-- `sm_backpack_zombie_ammo_max_pct` `[0-100]` - Maximum ammo fill percentage for weapons and ammo boxes spawned as backpack loot
+| Command | Description | Default Value |
+| --- | --- | --- |
+| sm_backpack_loot_ammo_min | Minimum ammo boxes to place in backpacks spawned as loot | 0 |
+| sm_backpack_loot_ammo_max | Maximum ammo boxes to place in backpacks spawned as loot | 4 |
+| sm_backpack_loot_ammo_min_pct | Minimum fill percentage for ammo boxes spawned as backpack loot | 40 |
+| sm_backpack_loot_ammo_max_pct | Maximum fill percentage for ammo boxes spawned as backpack loot | 100 |
+| sm_backpack_loot_gear_min | Minimum gear items to place in backpacks spawned as loot | 0 |
+| sm_backpack_loot_gear_max | Maximum gear items to place in backpacks spawned as loot | 1 |
+| sm_backpack_loot_weapon_min | Minimum weapons to place in backpacks spawned as loot | 0 |
+| sm_backpack_loot_weapon_max | Maximum weapons to place in backpacks spawned as loot | 2 |
+| sm_backpack_show_hints | Whether to show screen hints on how to use backpacks | 1 |
+| backpack2_version | Plugin version and description |  |
+| sm_backpack_hints_interval | Rate in seconds at which hints are updated | 1.0 |
+| sm_backpack_ammo_stack_limit | Number of ammo pickups that can be stored per ammo slot | 4 |
+| sm_backpack_count | Number of backpacks to create at round start | 1 |
+| sm_backpack_colorize | Randomly colorize backpacks to help distinguish them | 1 |
+| sm_backpack_glow_distance | Glow backbacks in this range of the player | 90 |
+| sm_backpack_blink | Whether dropped backpacks pulse their brightness | 0 |
+| sm_backpack_zombie_spawn_chance | Chance for a zombie to spawn with a backpack | 0.005 |
 
 ## Admin Commands
 
