@@ -1,3 +1,6 @@
+> [!WARNING]
+> This plugin is unmaintained since Torn Banner's acquisition of the game.
+
 # [NMRiH] Backpack 2
 This is a complete rewrite of [Backpack by Ryan](https://forums.alliedmods.net/showthread.php?t=308217) with added features and bug fixes.
 
